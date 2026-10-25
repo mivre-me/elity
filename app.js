@@ -11,6 +11,9 @@ const ss = {
   get(k){ try { return sessionStorage.getItem(k); } catch { return null; } },
   set(k,v){ try { sessionStorage.setItem(k,v); } catch {} },
 };
+const icon=(n)=>`<svg class="ic" aria-hidden="true"><use href="#i-${n}"/></svg>`;
+function iconBtn(name, label, onClick, cls){ const b=document.createElement("button"); b.type="button"; b.innerHTML=icon(name); b.setAttribute("aria-label",label); b.title=label; if (cls) b.className=cls; b.onclick=onClick; return b; }
+const fmtTime=(t)=>new Date(t).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit"});
 let toastT;
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.hidden=false; clearTimeout(toastT); toastT=setTimeout(()=>t.hidden=true,2800); }
 
@@ -136,7 +139,7 @@ function mark(){
   $("bar").style.width = chunks.length ? ((state==="idle"?0:idx)/chunks.length*100)+"%" : "0";
   const cur=reader.children[idx];
   if (cur && state==="playing" && view==="read") reader.scrollTo({ top: cur.offsetTop-reader.offsetTop-40, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth" });
-  playBtn.textContent = state==="playing" ? "❚❚ หยุดชั่วคราว" : state==="paused" ? "▶ อ่านต่อ" : "▶ อ่านออกเสียง";
+  playBtn.innerHTML = state==="playing" ? icon("pause")+"หยุดชั่วคราว" : state==="paused" ? icon("play")+"อ่านต่อ" : icon("play")+"อ่านออกเสียง";
 }
 function makeUtterance(text){
   const u=new SpeechSynthesisUtterance(text);
@@ -541,22 +544,47 @@ function scrollChat(){ const last=chatList.lastElementChild; if (last) last.scro
 function bubble(m){
   const li=document.createElement("li"); li.className="msg "+m.role;
   const body=document.createElement("div"); body.textContent=m.text; li.appendChild(body);
+  const meta=document.createElement("div"); meta.className="meta";
+  const tm=document.createElement("time"); tm.textContent=fmtTime(m.ts); meta.appendChild(tm);
   if (m.role==="assistant") {
-    const act=document.createElement("div"); act.className="act";
-    const sp=document.createElement("button"); sp.type="button"; sp.textContent="🔊 ฟัง"; sp.onclick=()=>speakPlain(m.text);
-    const cp=document.createElement("button"); cp.type="button"; cp.textContent="📋 คัดลอก"; cp.onclick=()=>{ navigator.clipboard?.writeText(m.text).then(()=>toast("คัดลอกแล้ว"),()=>toast("คัดลอกไม่ได้")); };
-    act.append(sp,cp); li.appendChild(act);
+    meta.append(
+      iconBtn("volume","ฟัง",()=>speakPlain(m.text)),
+      iconBtn("copy","คัดลอก",()=>{ navigator.clipboard?.writeText(m.text).then(()=>toast("คัดลอกแล้ว"),()=>toast("คัดลอกไม่ได้")); })
+    );
   }
+  li.appendChild(meta);
+  return li;
+}
+function greeting(){
+  const h=+new Date().toLocaleString("en-GB",{hour:"2-digit",hour12:false,timeZone:"Asia/Bangkok"});
+  return h<5 ? "ดึกแล้วนะ" : h<12 ? "อรุณสวัสดิ์" : h<17 ? "สวัสดีตอนบ่าย" : "สวัสดีตอนเย็น";
+}
+const SUGGEST=[
+  { t:"สรุปประกาศล่าสุด", d:"3 วันที่ผ่านมามีอะไรบ้าง", q:"สรุปประกาศ 3 วันล่าสุดให้หน่อย เรื่องไหนต้องทำอะไรบ้าง" },
+  { t:"เดือนนี้มีโปรอะไร", d:"ค้นจากประกาศที่เก็บไว้", q:"เดือนนี้มีโปรโมชั่นอะไรบ้าง" },
+  { t:"จดโน้ตให้หน่อย", d:"พูดหรือพิมพ์สิ่งที่อยากจำ", fill:"จดไว้หน่อย: " },
+  { t:"วันนี้ต้องทำอะไร", d:"ดูจากโน้ตและประกาศ", q:"วันนี้มีอะไรที่ต้องทำหรือต้องจำบ้าง ดูจากโน้ตและประกาศ" },
+];
+function renderHero(){
+  const s=vault.settings;
+  const li=document.createElement("li"); li.className="hero";
+  li.innerHTML='<svg class="big" aria-hidden="true"><use href="#mark"/></svg>';
+  const h=document.createElement("h2"); h.textContent=`${greeting()}${s.userCall?" "+s.userCall:""}`;
+  const p=document.createElement("p"); p.textContent=`${s.friendName||"Elity"} พร้อมช่วยแล้ว พิมพ์หรือกดไมค์พูดได้เลย`;
+  const g=document.createElement("div"); g.className="suggest";
+  for (const x of SUGGEST) {
+    const b=document.createElement("button"); b.type="button";
+    const bt=document.createElement("b"); bt.textContent=x.t; const bd=document.createElement("span"); bd.textContent=x.d; b.append(bt,bd);
+    b.onclick=()=>{ if (x.fill) { chatInput.value=x.fill; autoGrow(); chatInput.focus(); chatInput.setSelectionRange(x.fill.length,x.fill.length); } else ask(x.q); };
+    g.appendChild(b);
+  }
+  li.append(h,p,g);
   return li;
 }
 function renderChat(){
   if (!vault) return;
   chatList.textContent="";
-  if (!vault.chat.length) {
-    const li=document.createElement("li"); li.className="msg sys";
-    li.textContent=`เริ่มคุยกับ${vault.settings.friendName||"Elity"}ได้เลย พิมพ์หรือกดไมค์พูด ลองถามว่า "เดือนนี้มีโปรอะไรบ้าง" หรือบอกว่า "จดไว้หน่อย พรุ่งนี้ประชุม 10 โมง"`;
-    chatList.appendChild(li);
-  }
+  if (!vault.chat.length) chatList.appendChild(renderHero());
   for (const m of vault.chat) chatList.appendChild(bubble(m));
   if (view==="chat") scrollChat();
 }
@@ -637,7 +665,7 @@ async function ask(text){
   if (!navigator.onLine) { toast("ออฟไลน์อยู่ เพื่อนต้องใช้อินเทอร์เน็ต"); return; }
   busy=true; $("sendBtn").disabled=true;
   vault.chat.push({ id:crypto.randomUUID(), role:"user", text, ts:Date.now() }); changed(); renderChat();
-  const typing=document.createElement("li"); typing.className="msg assistant typing"; typing.textContent="กำลังพิมพ์…"; chatList.appendChild(typing); scrollChat();
+  const typing=document.createElement("li"); typing.className="msg assistant typing"; typing.innerHTML='<span class="dots" aria-label="กำลังพิมพ์"><i></i><i></i><i></i></span>'; chatList.appendChild(typing); scrollChat();
   try {
     const messages=historyForApi();
     let reply="";
@@ -717,16 +745,24 @@ function renderInbox(){
   $("inboxCount").textContent = `${all.length.toLocaleString("th-TH")} ประกาศ`;
   const ul=$("inboxList"); ul.textContent="";
   if (!list.length) { const li=document.createElement("li"); li.className="empty"; li.textContent = q ? "ไม่พบประกาศที่ค้นหา" : "ยังไม่มีประกาศ วางข้อความด้านบน หรือแชร์จาก LINE มาที่ Elity"; ul.appendChild(li); return; }
+  let lastDay="";
+  const dayLabel=(t)=>{ const d=new Date(t), now=new Date(); const sd=(a,b)=>a.toDateString()===b.toDateString(); const y=new Date(now); y.setDate(now.getDate()-1);
+    return sd(d,now)?"วันนี้":sd(d,y)?"เมื่อวาน":d.toLocaleDateString("th-TH",{weekday:"long",day:"numeric",month:"long"}); };
   for (const n of list.slice(0,200)) {
+    const day=dayLabel(n.ts);
+    if (day!==lastDay) { const h=document.createElement("li"); h.className="day"; h.textContent=day; ul.appendChild(h); lastDay=day; }
     const li=document.createElement("li"); li.className="item";
-    const d=document.createElement("span"); d.className="it-d"; d.textContent=fmtDate(n.ts);
+    const d=document.createElement("div"); d.className="it-head";
+    const dt=document.createElement("span"); dt.className="it-d"; dt.textContent=fmtTime(n.ts); d.appendChild(dt);
+    if (/@all/i.test(n.text)) { const p=document.createElement("span"); p.className="pill amber"; p.textContent="@all"; d.appendChild(p); }
+    if (/ด่วน|urgent/i.test(n.text)) { const p=document.createElement("span"); p.className="pill"; p.textContent="ด่วน"; d.appendChild(p); }
     const t=document.createElement("div"); t.className="it-t"; t.textContent=n.text; t.onclick=()=>t.classList.toggle("open");
     const a=document.createElement("div"); a.className="it-a";
-    const b1=document.createElement("button"); b1.type="button"; b1.textContent="🔊 ฟัง"; b1.onclick=()=>speakPlain(n.text);
-    const b2=document.createElement("button"); b2.type="button"; b2.textContent="💬 ถาม Elity"; b2.onclick=()=>{ showView("chat"); chatInput.value=`ช่วยสรุปประกาศนี้ และบอกว่าต้องทำอะไรบ้าง\n"""\n${n.text.slice(0,2000)}\n"""`; autoGrow(); chatInput.focus(); };
-    const b3=document.createElement("button"); b3.type="button"; b3.className="danger"; b3.textContent="ลบ";
+    const b1=document.createElement("button"); b1.type="button"; b1.innerHTML=icon("volume")+"ฟัง"; b1.onclick=()=>speakPlain(n.text);
+    const b2=document.createElement("button"); b2.type="button"; b2.innerHTML=icon("chat")+"ถาม Elity"; b2.onclick=()=>{ showView("chat"); chatInput.value=`ช่วยสรุปประกาศนี้ และบอกว่าต้องทำอะไรบ้าง\n"""\n${n.text.slice(0,2000)}\n"""`; autoGrow(); chatInput.focus(); };
+    const b3=document.createElement("button"); b3.type="button"; b3.className="danger"; b3.innerHTML=icon("trash")+"ลบ";
     b3.onclick=()=>{
-      if (inboxDelArm!==n.id) { inboxDelArm=n.id; b3.textContent="แตะอีกครั้งเพื่อลบ"; setTimeout(()=>{ if (inboxDelArm===n.id) { inboxDelArm=null; b3.textContent="ลบ"; } },3000); return; }
+      if (inboxDelArm!==n.id) { inboxDelArm=n.id; b3.innerHTML=icon("trash")+"แตะอีกครั้งเพื่อลบ"; setTimeout(()=>{ if (inboxDelArm===n.id) { inboxDelArm=null; b3.innerHTML=icon("trash")+"ลบ"; } },3000); return; }
       Object.assign(n,{ deleted:true, text:"", updated:Date.now() }); inboxDelArm=null; changed(); renderInbox(); toast("ลบประกาศแล้ว");
     };
     a.append(b1,b2,b3); li.append(d,t,a); ul.appendChild(li);
@@ -742,7 +778,7 @@ function updateBanner(){
   if (!seen) { store.set(seenKey(), String(Date.now())); return; }
   const fresh=(vault.inbox||[]).filter(n=>!n.deleted && !n.imported && n.ts>seen);
   $("newBanner").hidden=!fresh.length;
-  if (fresh.length) $("newText").textContent=`📣 มีประกาศใหม่ ${fresh.length} รายการตั้งแต่ ${fmtDate(seen)}`;
+  if (fresh.length) $("newText").textContent=`มีประกาศใหม่ ${fresh.length} รายการตั้งแต่ ${fmtDate(seen)}`;
 }
 $("seenBtn").onclick=markSeen;
 $("briefBtn").onclick=()=>{
