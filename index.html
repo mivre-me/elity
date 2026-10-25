@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.github.com https://api.anthropic.com; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Elity</title>
+<meta name="description" content="Elity เพื่อนและผู้ช่วยส่วนตัว เก็บประกาศ อ่านออกเสียง และโน้ตเข้ารหัส">
+<meta name="theme-color" content="#0f6b5c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Elity">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="app.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<div class="shell">
+  <header class="top">
+    <h1 id="viewTitle">Elity</h1>
+    <div class="top-r">
+      <span class="sync" id="syncBadge" hidden></span>
+      <button class="chip" id="installBtn" type="button" hidden>ติดตั้งแอพ</button>
+    </div>
+  </header>
+
+  <!-- LOCK (shared by chat + notes) -->
+  <section id="lockPane" class="lock" hidden>
+    <div class="lock-card">
+      <div class="lock-icon" aria-hidden="true">🔒</div>
+      <h2 class="lock-h" id="lockTitle">ปลดล็อกพื้นที่ส่วนตัว</h2>
+      <p class="lock-p">แชต ประกาศ และโน้ตถูกเข้ารหัสบนเครื่องนี้ก่อนเก็บ ใช้ชื่อผู้ใช้และรหัสผ่านเดียวกันในทุกเครื่อง</p>
+      <p class="share-pending" id="sharePending" hidden>📣 มีข้อความที่แชร์เข้ามารอเก็บ ปลดล็อกแล้วจะบันทึกให้ทันที</p>
+      <div class="tabs2">
+        <button type="button" class="seg on" id="modeLogin">เข้าสู่ระบบ</button>
+        <button type="button" class="seg" id="modeCreate">สร้างบัญชีใหม่</button>
+      </div>
+      <form id="authForm" class="form" autocomplete="on" novalidate>
+        <label>ชื่อผู้ใช้<input id="authUser" name="username" autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+        <label>รหัสผ่าน<input id="authPass" name="password" type="password" autocomplete="current-password"></label>
+        <label id="confirmWrap" hidden>ยืนยันรหัสผ่าน<input id="authPass2" type="password" autocomplete="new-password"></label>
+        <div class="meter" id="meterWrap" hidden><i id="meter"></i><span id="meterText"></span></div>
+        <details class="sub" id="ghDetails">
+          <summary id="ghSummary">เครื่องใหม่? ดึงข้อมูลจาก GitHub</summary>
+          <div class="form">
+            <label>Repo เก็บข้อมูล (owner/repo)<input id="authRepo" autocapitalize="none" spellcheck="false" placeholder="เช่น meelap/mee-data"></label>
+            <label>GitHub token<input id="authToken" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…"></label>
+          </div>
+        </details>
+        <p class="err" id="authErr" hidden></p>
+        <button class="play" id="authBtn" type="submit">ปลดล็อก</button>
+        <p class="hint" id="createHint" hidden>รหัสผ่านกู้คืนไม่ได้ ถ้าลืม ข้อมูลจะเปิดไม่ได้อีก จดเก็บไว้ในที่ปลอดภัย</p>
+      </form>
+    </div>
+  </section>
+
+  <!-- CHAT -->
+  <main class="view" id="view-chat">
+    <div id="chatBox" hidden>
+      <div class="banner" id="newBanner" hidden>
+        <span id="newText"></span>
+        <div class="row"><button class="chip" id="briefBtn" type="button">สรุปให้ฟัง</button><button class="chip" id="seenBtn" type="button">ดูแล้ว</button></div>
+      </div>
+      <div class="chat-setup" id="chatSetup" hidden>
+        <h2 class="setup-h">ให้ Elity คุยได้</h2>
+        <p class="hint">Elity ใช้ AI ของ Claude ต้องมี API key จาก console.anthropic.com (คิดค่าใช้จ่ายตามการใช้งานจริง) key ถูกเข้ารหัสเก็บไว้กับข้อมูลของพี่</p>
+        <div class="row"><input id="setupKey" type="password" autocomplete="off" placeholder="sk-ant-…" aria-label="Anthropic API key"><button class="chip" id="setupKeyBtn" type="button">บันทึก</button></div>
+      </div>
+      <ol class="chat" id="chatList" aria-live="polite"></ol>
+      <form class="composer" id="chatForm" novalidate>
+        <button class="sq mic" id="micBtn" type="button" aria-label="พูด">🎙</button>
+        <textarea id="chatInput" rows="1" placeholder="คุยกับเพื่อน…" aria-label="ข้อความ"></textarea>
+        <button class="sq send" id="sendBtn" type="submit" aria-label="ส่ง">➤</button>
+      </form>
+      <div class="chat-opts">
+        <label class="toggle"><input type="checkbox" id="autoSpeak"> อ่านคำตอบออกเสียง</label>
+        <button class="chip" id="stopTalk" type="button" hidden>■ หยุดพูด</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- INBOX (announcements) -->
+  <main class="view" id="view-inbox" hidden>
+    <div id="inboxBox" hidden>
+      <div class="sheet">
+        <textarea id="inboxInput" placeholder="วางประกาศที่นี่ หรือกดแชร์ข้อความจาก LINE แล้วเลือก Elity"></textarea>
+        <div class="tools">
+          <button class="play small" id="inboxAdd" type="button">เก็บประกาศ</button>
+          <span class="count" id="inboxCount"></span>
+        </div>
+      </div>
+      <div class="notes-bar"><input id="inboxSearch" type="search" placeholder="ค้นหาประกาศ เช่น โปร สต็อก วันหยุด" aria-label="ค้นหาประกาศ"></div>
+      <ul class="note-list inbox" id="inboxList"></ul>
+    </div>
+  </main>
+
+  <!-- READ -->
+  <main class="view" id="view-read" hidden>
+    <div class="sheet">
+      <textarea id="txt" aria-label="ข้อความที่จะอ่าน" placeholder="พิมพ์หรือวางข้อความที่ต้องการให้อ่าน"></textarea>
+      <div class="tools">
+        <button class="chip" id="fileBtn" type="button">เปิดไฟล์ .txt</button>
+        <button class="chip" id="clearBtn" type="button">ล้าง</button>
+        <button class="chip" id="saveNoteBtn" type="button">บันทึกเป็นโน้ต</button>
+        <span class="count" id="count"></span>
+        <input type="file" id="file" accept=".txt,text/plain" hidden>
+      </div>
+    </div>
+    <div class="gender" role="radiogroup" aria-label="เสียง">
+      <button type="button" class="seg" data-g="female" role="radio">เสียงผู้หญิง</button>
+      <button type="button" class="seg" data-g="male" role="radio">เสียงผู้ชาย</button>
+    </div>
+    <p class="hint" id="genderNote" hidden></p>
+    <div class="transport">
+      <button class="sq" id="prevBtn" type="button" aria-label="ประโยคก่อนหน้า">⏮</button>
+      <button class="play" id="playBtn" type="button">▶ อ่านออกเสียง</button>
+      <button class="sq" id="stopBtn" type="button" aria-label="หยุด">■</button>
+      <button class="sq" id="nextBtn" type="button" aria-label="ประโยคถัดไป">⏭</button>
+    </div>
+    <div class="progress"><i id="bar"></i></div>
+    <p class="note" id="note" hidden></p>
+    <div class="sheet">
+      <div class="sheet-h"><h2>กำลังอ่าน</h2><span class="hint">แตะประโยคเพื่อเริ่มจากตรงนั้น</span></div>
+      <div class="reader" id="reader"></div>
+    </div>
+  </main>
+
+  <!-- NOTES -->
+  <main class="view" id="view-notes" hidden>
+    <section id="notesPane" hidden>
+      <div class="notes-bar">
+        <input id="search" type="search" placeholder="ค้นหาโน้ต" aria-label="ค้นหาโน้ต">
+        <button class="play small" id="newNoteBtn" type="button">+ โน้ตใหม่</button>
+      </div>
+      <ul class="note-list" id="noteList"></ul>
+    </section>
+    <section id="editorPane" hidden>
+      <div class="ed-bar">
+        <button class="chip" id="backBtn" type="button">← โน้ตทั้งหมด</button>
+        <span class="hint" id="savedHint"></span>
+      </div>
+      <input id="noteTitle" class="note-title" placeholder="หัวข้อ" aria-label="หัวข้อโน้ต">
+      <textarea id="noteBody" class="note-body" placeholder="เขียนโน้ตที่นี่" aria-label="เนื้อหาโน้ต"></textarea>
+      <div class="ed-actions">
+        <button class="play small" id="speakNoteBtn" type="button">▶ อ่านโน้ตนี้</button>
+        <button class="chip danger" id="delNoteBtn" type="button">ลบโน้ต</button>
+      </div>
+      <div class="confirm" id="delConfirm" hidden>
+        <span>ลบโน้ตนี้ถาวร?</span>
+        <button class="chip danger" id="delYes" type="button">ลบ</button>
+        <button class="chip" id="delNo" type="button">ยกเลิก</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- SETTINGS -->
+  <main class="view" id="view-settings" hidden>
+    <section class="group" id="friendGroup" hidden>
+      <h2>Elity</h2>
+      <label>ชื่อผู้ช่วย<input id="friendName" maxlength="30"></label>
+      <label>ให้เรียกพี่ว่า<input id="userCall" maxlength="30"></label>
+      <label>นิสัยและวิธีพูด<textarea id="persona" rows="3" class="boxed" placeholder="เช่น เป็นกันเอง ตลกนิดๆ ตอบสั้น ใช้ครับ"></textarea></label>
+      <label>สมอง AI
+        <select id="model">
+          <option value="claude-haiku-5-5">Haiku — เร็ว ประหยัด</option>
+          <option value="claude-sonnet-5-5">Sonnet — ฉลาดขึ้น</option>
+          <option value="claude-opus-5-5">Opus — ฉลาดที่สุด แพงที่สุด</option>
+        </select>
+      </label>
+      <label>Anthropic API key<input id="aiKey" type="password" autocomplete="off" placeholder="sk-ant-…"></label>
+      <label class="toggle"><input type="checkbox" id="shareNotes" checked> ให้ Elity ค้นประกาศ ค้นโน้ต และจดโน้ตให้ได้</label>
+      <div class="row"><button class="chip" id="saveFriend" type="button">บันทึก</button><button class="chip danger" id="clearChat" type="button">ล้างประวัติแชต</button></div>
+      <div class="confirm" id="clearChatConfirm" hidden><span>ล้างประวัติแชตทั้งหมด?</span><button class="chip danger" id="clearChatYes" type="button">ล้าง</button><button class="chip" id="clearChatNo" type="button">ยกเลิก</button></div>
+    </section>
+
+    <section class="group">
+      <h2>เสียงอ่าน</h2>
+      <label>เสียงภาษาไทย<select id="voiceTh"></select></label>
+      <label>เสียงภาษาอังกฤษ<select id="voiceEn"></select></label>
+      <label><span class="lr">ความเร็ว <b id="rateV">1.0×</b></span><input type="range" id="rate" min="0.5" max="2" step="0.1" value="1"></label>
+      <label><span class="lr">ระดับเสียง <b id="pitchV">1.0</b></span><input type="range" id="pitch" min="0.5" max="1.5" step="0.1" value="1"></label>
+      <button class="chip" id="testVoice" type="button">ทดสอบเสียง</button>
+      <p class="hint" id="voiceHelp"></p>
+    </section>
+
+    <section class="group" id="ghGroup" hidden>
+      <h2>ซิงก์ผ่าน GitHub</h2>
+      <p class="hint">เก็บข้อมูลที่เข้ารหัสแล้วไว้ใน repo ส่วนตัว (private) ของพี่ แล้วเปิดจากเครื่องไหนก็ได้</p>
+      <label>Repo เก็บข้อมูล (owner/repo)<input id="ghRepo" autocapitalize="none" spellcheck="false" placeholder="เช่น meelap/mee-data"></label>
+      <label>GitHub token<input id="ghToken" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…"></label>
+      <div class="row"><button class="chip" id="ghSave" type="button">บันทึกและทดสอบ</button><button class="chip" id="syncNow" type="button">ซิงก์ตอนนี้</button></div>
+      <p class="hint" id="ghStatus"></p>
+      <details class="sub"><summary>วิธีสร้าง token</summary>
+        <ol class="steps">
+          <li>สร้าง repo ใหม่บน GitHub ตั้งเป็น <b>Private</b> เช่นชื่อ mee-data</li>
+          <li>ไปที่ GitHub → Settings → Developer settings → Fine-grained tokens → Generate new token</li>
+          <li>Repository access: เลือก Only select repositories → เลือก mee-data</li>
+          <li>Permissions → Contents: Read and write แล้วกด Generate</li>
+          <li>คัดลอก token มาวางที่นี่ token อยู่เฉพาะเครื่องนี้และถูกเข้ารหัสไว้</li>
+        </ol>
+      </details>
+    </section>
+
+    <section class="group">
+      <h2>ความปลอดภัย</h2>
+      <label>ล็อกอัตโนมัติเมื่อไม่ได้ใช้
+        <select id="lockAfter">
+          <option value="1">1 นาที</option>
+          <option value="5">5 นาที</option>
+          <option value="15">15 นาที</option>
+          <option value="60">1 ชั่วโมง</option>
+        </select>
+      </label>
+      <div id="acctBox" hidden>
+        <p class="acct">บัญชี <b id="acctName"></b> · <span id="acctSync"></span></p>
+        <div class="row">
+          <button class="chip" id="lockNow" type="button">ล็อกตอนนี้</button>
+          <button class="chip" id="exportBtn" type="button">สำรองข้อมูล (เข้ารหัส)</button>
+          <button class="chip" id="importBtn" type="button">นำเข้าไฟล์สำรอง</button>
+          <input type="file" id="importFile" accept=".mrvault,application/json" hidden>
+          <button class="chip" id="elityImportBtn" type="button">นำเข้าประกาศจาก Elity เดิม (CSV)</button>
+          <input type="file" id="elityFile" accept=".csv,text/csv" hidden>
+        </div>
+        <p class="hint">Elity เดิม: เปิดชีต Elity Brain → แท็บ Inbox → ไฟล์ → ดาวน์โหลด → CSV แล้วนำเข้าที่นี่</p>
+      </div>
+      <p class="hint" id="acctNone">ยังไม่ได้ปลดล็อก</p>
+      <p class="hint">ข้อมูลเข้ารหัสด้วย AES-256-GCM กุญแจสร้างจากรหัสผ่านบนเครื่องนี้ (PBKDF2 600,000 รอบ) GitHub และ Anthropic ไม่เห็นรหัสผ่าน GitHub เก็บได้เฉพาะข้อมูลที่เข้ารหัสแล้ว</p>
+    </section>
+
+    <section class="group">
+      <h2>ติดตั้งลงมือถือ</h2>
+      <p class="hint"><b>Android (Chrome):</b> เมนู ⋮ → ติดตั้งแอพ หรือ เพิ่มลงในหน้าจอหลัก</p>
+      <p class="hint"><b>iPhone (Safari):</b> ปุ่มแชร์ → เพิ่มไปยังหน้าจอโฮม</p>
+    </section>
+  </main>
+
+  <nav class="tabbar" aria-label="เมนู">
+    <button type="button" class="tab on" data-view="chat"><span aria-hidden="true">💬</span>Elity</button>
+    <button type="button" class="tab" data-view="inbox"><span aria-hidden="true">📣</span>ประกาศ</button>
+    <button type="button" class="tab" data-view="read"><span aria-hidden="true">🔊</span>อ่าน</button>
+    <button type="button" class="tab" data-view="notes"><span aria-hidden="true">📝</span>โน้ต</button>
+    <button type="button" class="tab" data-view="settings"><span aria-hidden="true">⚙︎</span>ตั้งค่า</button>
+  </nav>
+  <div class="toast" id="toast" role="status" hidden></div>
+</div>
+</body>
+</html>
