@@ -441,7 +441,31 @@ $("authForm").addEventListener("submit", async (e)=>{
   } finally { btn.disabled=false; btn.textContent=label; }
 });
 
+/* --- Stay unlocked across app reopens (e.g. after sharing) until the auto-lock timer runs out.
+   The AES key is a non-extractable CryptoKey, kept only in this browser's IndexedDB. --- */
+const IDB={
+  db:null,
+  open(){ if (this.db) return Promise.resolve(this.db); return new Promise((res,rej)=>{ try { const r=indexedDB.open("elity",1); r.onupgradeneeded=()=>r.result.createObjectStore("kv"); r.onsuccess=()=>{ this.db=r.result; res(r.result); }; r.onerror=()=>rej(r.error); } catch(e){ rej(e); } }); },
+  async run(mode, fn){ try { const db=await this.open(); return await new Promise(res=>{ const st=db.transaction("kv",mode).objectStore("kv"); const q=fn(st); q.onsuccess=()=>res(q.result); q.onerror=()=>res(null); }); } catch { return null; } },
+  get(k){ return this.run("readonly", st=>st.get(k)); }, set(k,v){ return this.run("readwrite", st=>st.put(v,k)); }, del(k){ return this.run("readwrite", st=>st.delete(k)); },
+};
+let sessT=0;
+function saveSession(force){ if (!acct) return; if (!force && Date.now()-sessT<30000) return; sessT=Date.now(); IDB.set("session",{ key:acct.key, id:acct.id, user:acct.user, exp:Date.now()+lockMinutes()*60000 }); }
+async function restoreSession(){
+  const ss_=await IDB.get("session"); if (!ss_ || !ss_.key || ss_.exp<Date.now()) { if (ss_) IDB.del("session"); return false; }
+  try {
+    const a={ user:ss_.user, key:ss_.key, id:ss_.id };
+    const cached=store.get(cacheKey(a.id)); if (!cached) return false;
+    const c=JSON.parse(cached); const v=await decryptObj(a,c);
+    const cd=store.get(devKey(a.id)); const d=cd ? await decryptObj(a, JSON.parse(cd)) : null;
+    acct=a; vault=v; remoteSha=c.sha; dirty=!!c.dirty; dev=d;
+    vault.chat ||= []; vault.notes ||= []; vault.inbox ||= []; vault.settings ||= emptyVault(a.user).settings;
+    onUnlocked(); sync(); return true;
+  } catch { IDB.del("session"); return false; }
+}
+
 function onUnlocked(){
+  saveSession(true);
   $("acctBox").hidden=false; $("acctNone").hidden=true; $("acctName").textContent=acct.user;
   $("friendGroup").hidden=false; $("ghGroup").hidden=false;
   $("notesPane").hidden=false; $("editorPane").hidden=true; $("chatBox").hidden=false; $("inboxBox").hidden=false;
@@ -453,6 +477,7 @@ function onUnlocked(){
 }
 function lock(){
   if (!acct) return;
+  IDB.del("session");
   commitEditor();
   saveLocal().finally(()=>{
     acct=null; vault=null; dev=null; remoteSha=null; currentNoteId=null;
@@ -468,7 +493,7 @@ let lastActive=Date.now(), hiddenAt=0;
 const lockMinutes=()=>+($("lockAfter").value||5);
 $("lockAfter").value=store.get("sa_lock")||"5";
 $("lockAfter").onchange=(e)=>store.set("sa_lock", e.target.value);
-function bumpActivity(){ lastActive=Date.now(); }
+function bumpActivity(){ lastActive=Date.now(); saveSession(); }
 ["pointerdown","keydown","input","scroll"].forEach(ev=>addEventListener(ev,bumpActivity,{passive:true,capture:true}));
 setInterval(()=>{ if (acct && !busy && Date.now()-lastActive>lockMinutes()*60000) lock(); }, 15000);
 document.addEventListener("visibilitychange",()=>{
@@ -772,12 +797,25 @@ async function sheetPost(payload){
   return j;
 }
 const sheetBusy=new Set();
+const SHARE_CACHE="elity-share";
+const blobToB64=(b)=>new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(",")[1]||""); r.onerror=()=>rej(new Error("อ่านไฟล์ไม่สำเร็จ")); r.readAsDataURL(b); });
+async function shareFiles(n){
+  if (!n.shareId || !n.files?.length || !("caches" in window)) return [];
+  const c=await caches.open(SHARE_CACHE); const out=[];
+  for (const f of n.files) { const r=await c.match(`__share/${n.shareId}/${f.i}`); if (r) out.push({ name:f.name, mimeType:f.type, data: await blobToB64(await r.blob()) }); }
+  return out;
+}
+async function dropShare(id){ if (!id || !("caches" in window)) return; try { const c=await caches.open(SHARE_CACHE); for (const k of await c.keys()) if (k.url.includes(`/__share/${id}/`)) await c.delete(k); } catch {} }
 async function pushToSheet(n, src){
   if (!sheetReady() || !navigator.onLine || sheetBusy.has(n.id)) return false;
   sheetBusy.add(n.id);
   try {
-    await sheetPost({ source: src||"elity", text: n.text, files: [] });
-    n.sheet="ok"; n.updated=Date.now(); changed(); return true;
+    const files=await shareFiles(n);
+    if (n.files?.length && files.length < n.files.length) n.filesLost=true;
+    await sheetPost({ source: src||"elity", text: n.rawText ?? n.text, files });
+    n.sheet="ok"; n.updated=Date.now();
+    if (n.shareId) { dropShare(n.shareId); delete n.shareId; }
+    changed(); renderInbox(); return true;
   } catch (e) { n.sheet="pending"; $("sheetStatus").textContent="ส่งเข้าชีตไม่สำเร็จ: "+e.message+" จะลองใหม่อัตโนมัติ"; return false; }
   finally { sheetBusy.delete(n.id); }
 }
@@ -787,15 +825,32 @@ async function flushSheet(){
   for (const n of (vault.inbox||[]).filter(x=>!x.deleted && x.sheet==="pending")) { if (await pushToSheet(n,"elity-retry")) sent++; }
   return sent;
 }
-function savePendingShare(){
-  const t=ss.get(PENDING); if (!t || !vault) return;
-  try { sessionStorage.removeItem(PENDING); } catch {}
+async function savePendingShare(){
+  if (!vault) return;
+  const t=ss.get(PENDING);
+  if (t) { try { sessionStorage.removeItem(PENDING); } catch {} $("sharePending").hidden=true; if (addInbox(t)) { toast("เก็บประกาศที่แชร์มาแล้ว"); showView("inbox"); } }
+  const id=ss.get("sa_share_id"); if (!id) return;
+  try { sessionStorage.removeItem("sa_share_id"); } catch {}
   $("sharePending").hidden=true;
-  if (addInbox(t)) { toast("เก็บประกาศที่แชร์มาแล้ว"); showView("inbox"); }
+  if (id==="error") return toast("รับข้อมูลที่แชร์มาไม่สำเร็จ ลองแชร์อีกครั้ง");
+  let meta=null;
+  try { const c=await caches.open(SHARE_CACHE); const r=await c.match(`__share/${id}/meta`); meta=r && await r.json(); } catch {}
+  if (!meta) return toast("ไม่พบข้อมูลที่แชร์มา ลองแชร์อีกครั้ง");
+  const names=meta.files.map(f=>f.name);
+  const shown=[meta.text, names.length ? "📎 "+names.join(", ") : ""].filter(Boolean).join("\n");
+  if (!shown) { dropShare(id); return; }
+  const n={ id:crypto.randomUUID(), text:shown, rawText:meta.text, ts:meta.at||Date.now(), updated:Date.now(), sheet:"pending", files:meta.files, shareId: meta.files.length?id:undefined };
+  vault.inbox.push(n); changed(); renderInbox(); showView("inbox");
+  if (!meta.files.length) dropShare(id);
+  if (meta.files.length && !sheetReady()) toast("เก็บข้อความแล้ว ไฟล์แนบจะส่งเข้า Google Sheet เมื่อตั้งค่าในหน้าตั้งค่า");
+  else toast(meta.files.length ? `เก็บแล้ว กำลังส่งไฟล์ ${meta.files.length} ไฟล์เข้าชีต…` : "เก็บประกาศที่แชร์มาแล้ว");
+  const ok=await pushToSheet(n,"share");
+  if (meta.files.length && ok) toast("ส่งไฟล์เข้าชีตแล้ว");
 }
 // Incoming share (Android share sheet → manifest share_target)
 (function readShare(){
   const q=new URLSearchParams(location.search);
+  if (q.get("shared")) { ss.set("sa_share_id", q.get("shared")); history.replaceState(null,"",location.pathname); view="inbox"; $("sharePending").hidden=false; return; }
   const text=(q.get("text")||"").trim(), title=(q.get("title")||"").trim(), url=(q.get("url")||"").trim();
   let out = text || title;
   if (url && !out.includes(url)) out = out ? out+"\n"+url : url;
@@ -825,6 +880,7 @@ function renderInbox(){
     const d=document.createElement("div"); d.className="it-head";
     const dt=document.createElement("span"); dt.className="it-d"; dt.textContent=fmtTime(n.ts); d.appendChild(dt);
     if (/@all/i.test(n.text)) { const p=document.createElement("span"); p.className="pill amber"; p.textContent="@all"; d.appendChild(p); }
+    if (n.files?.length) { const p=document.createElement("span"); p.className="pill"; p.textContent=`📎 ${n.files.length} ไฟล์${n.sheet==="ok"?" · อยู่ในชีต":" · รอส่ง"}`; d.appendChild(p); }
     if (/ด่วน|urgent/i.test(n.text)) { const p=document.createElement("span"); p.className="pill"; p.textContent="ด่วน"; d.appendChild(p); }
     const t=document.createElement("div"); t.className="it-t"; t.textContent=n.text; t.onclick=()=>t.classList.toggle("open");
     const a=document.createElement("div"); a.className="it-a";
@@ -963,11 +1019,12 @@ let deferredPrompt=null;
 addEventListener("beforeinstallprompt",(e)=>{ e.preventDefault(); deferredPrompt=e; $("installBtn").hidden=false; });
 $("installBtn").onclick=async()=>{ if (!deferredPrompt) return; deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt=null; $("installBtn").hidden=true; };
 addEventListener("appinstalled",()=>{ $("installBtn").hidden=true; toast("ติดตั้งแล้ว"); });
-if ("serviceWorker" in navigator && location.protocol==="https:") addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));
+if ("serviceWorker" in navigator && (location.protocol==="https:"||location.hostname==="localhost")) addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));
 
 setMode(store.get("sa_last_user") ? "login" : "create");
 setGender(gender);
 if (synth) { loadVoices(); synth.onvoiceschanged=loadVoices; } else loadVoices();
 render();
 showView(view);
+restoreSession();
 })();
