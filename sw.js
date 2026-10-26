@@ -1,7 +1,7 @@
-const VERSION = "elity-v10";
+const VERSION = "elity-v12";
 const ASSETS = [
   "./", "index.html", "app.css", "app.js", "manifest.webmanifest",
-  "icon-192.png", "icon-512.png", "icon-maskable.png", "apple-touch-icon.png", "silence.wav",
+  "icon-192.png", "icon-512.png", "icon-maskable.png", "apple-touch-icon.png", "silence.wav", "logo-mark.png",
   "fonts/ibm-plex-sans-thai-thai-400-normal.woff2", "fonts/ibm-plex-sans-thai-latin-400-normal.woff2",
   "fonts/ibm-plex-sans-thai-thai-500-normal.woff2", "fonts/ibm-plex-sans-thai-latin-500-normal.woff2",
   "fonts/ibm-plex-sans-thai-thai-600-normal.woff2", "fonts/ibm-plex-sans-thai-latin-600-normal.woff2",

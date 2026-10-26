@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.github.com https://api.anthropic.com https://script.google.com https://script.googleusercontent.com; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; media-src 'self' blob:; connect-src 'self' https://texttospeech.googleapis.com https://api.github.com https://api.anthropic.com https://script.google.com https://script.googleusercontent.com; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <title>Elity</title>
 <meta name="description" content="Elity เพื่อนและผู้ช่วยส่วนตัว เก็บประกาศ อ่านออกเสียง และโน้ตเข้ารหัส">
@@ -23,7 +23,7 @@
     <linearGradient id="mk-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#13866d"/><stop offset="1" stop-color="#0a4c3f"/></linearGradient>
     <radialGradient id="mk-h" cx=".3" cy=".22" r=".75"><stop offset="0" stop-color="#fff" stop-opacity=".16"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
   </defs>
-  <symbol id="mark" viewBox="0 0 512 512"><rect width="512" height="512" rx="128" fill="url(#mk-g)"/><rect width="512" height="512" rx="128" fill="url(#mk-h)"/><path d="M150 256 H362 A112 112 0 1 0 337 327" fill="none" stroke="#f6f1e6" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/><circle cx="386" cy="372" r="24" fill="#f2a93b"/></symbol>
+  <symbol id="mark" viewBox="0 0 512 512"><clipPath id="mk-clip"><rect width="512" height="512" rx="120"/></clipPath><image href="logo-mark.png" width="512" height="512" clip-path="url(#mk-clip)" preserveAspectRatio="xMidYMid slice"/></symbol>
   <symbol id="i-chat" viewBox="0 0 24 24"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 17H10l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z"/></symbol>
   <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 10.5v3h2.5l7 4.5v-12l-7 4.5H4zM17 9.5a3.5 3.5 0 0 1 0 5"/></symbol>
   <symbol id="i-volume" viewBox="0 0 24 24"><path d="M4 9.5v5h3.5l5 4v-13l-5 4H4zM16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"/></symbol>
@@ -208,6 +208,25 @@
       <label class="switch"><input type="checkbox" id="shareNotes" checked><span class="track"></span><span class="sw-l">ให้ Elity ค้นประกาศ ค้นโน้ต และจดโน้ตให้ได้</span></label>
       <div class="row"><button class="play small" id="saveFriend" type="button">บันทึก</button><button class="chip danger" id="clearChat" type="button">ล้างประวัติแชต</button></div>
       <div class="confirm" id="clearChatConfirm" hidden><span>ล้างประวัติแชตทั้งหมด?</span><button class="chip danger" id="clearChatYes" type="button">ล้าง</button><button class="chip" id="clearChatNo" type="button">ยกเลิก</button></div>
+    </section>
+
+    <section class="group" id="gttsGroup" hidden>
+      <h2>เสียงคุณภาพสูง (Google)</h2>
+      <p class="hint">เสียงไทยธรรมชาติ มีทั้งชายและหญิง อ่านต่อได้แม้ปิดจอหรือปิดแอพ ใช้ฟรีเดือนละ 1-4 ล้านตัวอักษร ถ้าไม่มีเน็ตจะใช้เสียงในเครื่องแทน</p>
+      <label>Google Cloud API key<input id="gttsKey" type="password" autocomplete="off" spellcheck="false" placeholder="AIza…"></label>
+      <label class="switch"><input type="checkbox" id="gttsOn" checked><span class="track"></span><span class="sw-l">ใช้เสียง Google</span></label>
+      <label>เสียงภาษาไทย (Google)<select id="gVoiceTh"><option value="">อัตโนมัติ (เลือกตามเพศเสียง)</option></select></label>
+      <div class="row"><button class="play small" id="gttsSave" type="button">บันทึกและทดสอบ</button></div>
+      <p class="hint" id="gttsStatus"></p>
+      <details class="sub"><summary>วิธีสร้าง key</summary>
+        <ol class="steps">
+          <li>เปิด console.cloud.google.com → สร้างโปรเจกต์ใหม่ชื่อ Elity</li>
+          <li>ค้นหา Cloud Text-to-Speech API → กด Enable (ต้องผูกบัตรครั้งแรก แต่ใช้ในโควตาฟรีไม่เสียเงิน)</li>
+          <li>APIs &amp; Services → Credentials → Create credentials → API key</li>
+          <li>กด Edit key: Application restrictions เลือก Websites ใส่ mivre-me.github.io/* และ API restrictions เลือก Cloud Text-to-Speech API → Save</li>
+          <li>คัดลอก key มาวางที่นี่ แล้วกดบันทึกและทดสอบ</li>
+        </ol>
+      </details>
     </section>
 
     <section class="group">

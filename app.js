@@ -56,6 +56,7 @@ function setGender(g){
   gender=g; store.set("sa_gender", g);
   document.querySelectorAll(".gender .seg").forEach(b=>b.setAttribute("aria-checked", String(b.dataset.g===g)));
   fillVoiceSelects(); updateGenderNote();
+  if (typeof vault!=="undefined" && vault && vault.settings?.gttsKey) { try { $("gVoiceTh").value=vault.settings["gVoice_th-TH_"+g]||""; } catch {} }
   if (state==="playing") speakFrom(idx);
 }
 document.querySelectorAll(".gender .seg").forEach(b=>b.onclick=()=>setGender(b.dataset.g));
@@ -173,9 +174,92 @@ if (MS) {
 }
 document.addEventListener("visibilitychange",()=>{ if (document.visibilityState==="visible" && (state==="playing"||talkingNow)) wakeOn(); });
 
+/* --- Google Cloud Text-to-Speech: real audio files played like a music app,
+   so reading continues with the screen off or the app closed. Falls back to the device voice. --- */
+const GT="https://texttospeech.googleapis.com/v1";
+const cloudAudio=new Audio(); cloudAudio.preload="auto";
+let playMode="browser", cloudResolve=null, cloudFailUntil=0;
+const gKey=()=> (vault && vault.settings && vault.settings.gttsOn!==false && vault.settings.gttsKey) || "";
+const useCloud=()=> !!gKey() && navigator.onLine && Date.now()>cloudFailUntil;
+const gVoiceCache={};
+async function gVoicesFor(lang){
+  if (gVoiceCache[lang]) return gVoiceCache[lang];
+  const r=await fetch(`${GT}/voices?languageCode=${lang}&key=${encodeURIComponent(gKey())}`);
+  const j=await r.json().catch(()=>({}));
+  if (!r.ok) throw new Error(j?.error?.message||("HTTP "+r.status));
+  return gVoiceCache[lang]=(j.voices||[]).filter(v=>(v.languageCodes||[]).includes(lang));
+}
+const vRank=(n)=>/Chirp3-HD/.test(n)?0:/Chirp-HD/.test(n)?1:/Neural2/.test(n)?2:/Wavenet/.test(n)?3:/Standard/.test(n)?4:5;
+async function gPick(lang){
+  const list=await gVoicesFor(lang); if (!list.length) throw new Error("ไม่มีเสียง "+lang);
+  const pref=vault.settings["gVoice_"+lang+"_"+gender]; const hit=pref && list.find(v=>v.name===pref); if (hit) return hit;
+  const want=gender==="male"?"MALE":"FEMALE";
+  const ranked=(arr)=>arr.slice().sort((a,b)=>vRank(a.name)-vRank(b.name)||a.name.localeCompare(b.name));
+  return ranked(list.filter(v=>v.ssmlGender===want))[0] || ranked(list)[0];
+}
+const audioCache=new Map();
+async function gSynth(text){
+  let lang=isThaiText(text)?"th-TH":"en-US", v;
+  try { v=await gPick(lang); } catch (e) { if (lang==="th-TH") throw e; lang="th-TH"; v=await gPick(lang); }
+  const rate=+$("rate").value, pitch=+$("pitch").value, key=v.name+"|"+rate+"|"+pitch+"|"+text;
+  if (audioCache.has(key)) return audioCache.get(key);
+  const ac={ audioEncoding:"MP3", speakingRate: Math.min(4,Math.max(0.25,rate)) };
+  if (!/Chirp/.test(v.name)) ac.pitch=Math.max(-20,Math.min(20,(pitch-1)*16));
+  const job=(async()=>{
+    const r=await fetch(`${GT}/text:synthesize?key=${encodeURIComponent(gKey())}`,{ method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ input:{ text }, voice:{ languageCode:lang, name:v.name }, audioConfig:ac }) });
+    const j=await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(j?.error?.message||("HTTP "+r.status));
+    return URL.createObjectURL(new Blob([unb64(j.audioContent)],{ type:"audio/mpeg" }));
+  })();
+  audioCache.set(key, job); job.catch(()=>audioCache.delete(key));
+  if (audioCache.size>120) audioCache.delete(audioCache.keys().next().value);
+  return job;
+}
+// Join sentences into requests (Google limit 5000 bytes; Thai ≈ 3 bytes/char)
+function groupChunks(list, from){
+  const out=[]; let cur=null;
+  for (let k=from;k<list.length;k++) {
+    const t=list[k], th=isThaiText(t);
+    if (!cur || cur.th!==th || (cur.text+" "+t).length>1100) { cur={ text:t, from:k, to:k, th, lens:[t.length] }; out.push(cur); }
+    else { cur.text+=" "+t; cur.to=k; cur.lens.push(t.length); }
+  }
+  return out;
+}
+function primeAudio(){ try { cloudAudio.src="silence.wav"; cloudAudio.play().catch(()=>{}); } catch {} }
+async function cloudRun(groups, my, hooks){
+  const pre=(i)=>{ const g=groups[i]; if (g && !g.url) g.url=gSynth(g.text); };
+  pre(0); pre(1); pre(2);
+  for (let gi=0; gi<groups.length; gi++) {
+    if (my!==runId) return;
+    const g=groups[gi]; pre(gi+1); pre(gi+2); pre(gi+3);
+    let url; try { url=await g.url; } catch (e) { if (my===runId) hooks.fail(e, g); return; }
+    if (my!==runId) return;
+    hooks.start && hooks.start(g);
+    cloudAudio.src=url;
+    cloudAudio.ontimeupdate = hooks.progress ? ()=>{ if (my===runId && cloudAudio.duration) hooks.progress(g, cloudAudio.currentTime/cloudAudio.duration); } : null;
+    try { await cloudAudio.play(); } catch (e) { if (my===runId) hooks.fail(new Error("เล่นเสียงไม่ได้ แตะปุ่มเล่นอีกครั้ง"), g); return; }
+    await new Promise(res=>{ cloudResolve=res; cloudAudio.onended=()=>res(); cloudAudio.onerror=()=>res(); });
+    cloudResolve=null;
+  }
+  if (my===runId) hooks.done && hooks.done();
+}
+function cloudReader(i){
+  const my=++runId; synth && synth.cancel(); keepAlive.pause();
+  playMode="cloud"; idx=i; state="playing"; mark(); talking(false);
+  setMeta(chunks[i]); if (MS) MS.playbackState="playing"; wakeOn();
+  cloudRun(groupChunks(chunks, i), my, {
+    start:(g)=>{ idx=g.from; mark(); setMeta(chunks[g.from]); },
+    progress:(g,f)=>{ const total=g.lens.reduce((a,b)=>a+b,0); let acc=0, k=g.from; for (const L of g.lens) { if ((acc+L)/total>f) break; acc+=L; k++; } k=Math.min(k,g.to); if (k!==idx) { idx=k; mark(); } },
+    done:()=>{ state="idle"; idx=0; playMode="browser"; mark(); if (MS) { MS.playbackState="none"; try { MS.metadata=null; } catch {} } wakeOff(); },
+    fail:(e,g)=>{ cloudFailUntil=Date.now()+60000; toast("เสียง Google ใช้ไม่ได้ ("+e.message+") ใช้เสียงในเครื่องแทน"); playMode="browser"; speakFrom(g.from); }
+  });
+}
+
 function speakFrom(i){
-  if (!synth || !chunks.length) return;
-  const my=++runId; synth.cancel(); idx=i; state="playing"; mark(); talking(false);
+  if (!chunks.length) return;
+  if (useCloud()) return cloudReader(i);
+  if (!synth) return;
+  const my=++runId; synth.cancel(); cloudAudio.pause(); playMode="browser"; idx=i; state="playing"; mark(); talking(false);
   bgStart(chunks[i]);
   // Queue every remaining sentence now so the phone's speech engine keeps going
   // even if the page is throttled in the background.
@@ -189,18 +273,25 @@ function speakFrom(i){
     }
   },60);
 }
-function pauseReading(){ synth.pause(); state="paused"; mark(); bgPause(); }
+function pauseReading(){
+  if (playMode==="cloud") { cloudAudio.pause(); state="paused"; mark(); if (MS) MS.playbackState="paused"; return; }
+  synth.pause(); state="paused"; mark(); bgPause();
+}
 function resumeReading(){
+  if (playMode==="cloud") { state="playing"; mark(); cloudAudio.play().catch(()=>speakFrom(idx)); if (MS) MS.playbackState="playing"; return; }
   state="playing"; synth.resume(); mark(); bgStart(chunks[idx]||"");
   setTimeout(()=>{ if (state==="playing" && !synth.speaking) speakFrom(idx); },350);
 }
 playBtn.onclick=()=>{
-  if (!synth) return;
   if (state==="playing") return pauseReading();
   if (state==="paused") return resumeReading();
+  if (useCloud()) primeAudio();
   render(); speakFrom(idx);
 };
-function stopReading(){ runId++; synth&&synth.cancel(); state="idle"; idx=0; mark(); talking(false); bgStop(); }
+function stopReading(){
+  runId++; synth&&synth.cancel(); cloudAudio.pause(); if (cloudResolve) { cloudResolve(); cloudResolve=null; }
+  playMode="browser"; state="idle"; idx=0; mark(); talking(false); bgStop();
+}
 $("stopBtn").onclick=stopReading;
 $("nextBtn").onclick=()=>{ if (idx<chunks.length-1) speakFrom(idx+1); };
 $("prevBtn").onclick=()=>speakFrom(Math.max(0,idx-1));
@@ -218,16 +309,30 @@ for (const k of ["rate","pitch"]) {
 }
 $("keepAwake").checked = store.get("sa_awake")==="1";
 $("keepAwake").onchange=(e)=>{ store.set("sa_awake", e.target.checked?"1":"0"); if (e.target.checked && state==="playing") wakeOn(); if (!e.target.checked) wakeOff(); };
-$("testVoice").onclick=()=>{ if (!synth) return; stopReading(); synth.speak(makeUtterance(gender==="male"?"สวัสดีครับ นี่คือเสียงที่เลือกไว้":"สวัสดีค่ะ นี่คือเสียงที่เลือกไว้")); };
+$("testVoice").onclick=()=>{
+  const t=gender==="male"?"สวัสดีครับ นี่คือเสียงที่เลือกไว้":"สวัสดีค่ะ นี่คือเสียงที่เลือกไว้";
+  stopReading();
+  if (useCloud()) { primeAudio(); const my=runId; cloudRun([{ text:t, from:0, to:0, lens:[t.length] }], my, { fail:(e)=>toast("เสียง Google ใช้ไม่ได้: "+e.message) }); return; }
+  if (synth) synth.speak(makeUtterance(t));
+};
 
 // Speak a reply (used by chat)
 let talkingNow=false;
 function talking(on){ talkingNow=on; $("stopTalk").hidden=!on; }
 function speakPlain(text){
-  if (!synth) return;
   stopReading();
   const clean = text.replace(/[*_#`>|]/g," ").replace(/\[(.*?)\]\(.*?\)/g,"$1");
   const parts = split(clean); if (!parts.length) return;
+  if (useCloud()) {
+    primeAudio(); const my=runId; talking(true); playMode="cloud";
+    setMeta("คำตอบจาก "+(vault?.settings?.friendName||"Elity")); if (MS) MS.playbackState="playing";
+    cloudRun(groupChunks(parts,0), my, {
+      done:()=>{ talking(false); playMode="browser"; if (MS) MS.playbackState="none"; },
+      fail:(e)=>{ cloudFailUntil=Date.now()+60000; talking(false); playMode="browser"; toast("เสียง Google ใช้ไม่ได้ ใช้เสียงในเครื่องแทน"); speakPlain(text); }
+    });
+    return;
+  }
+  if (!synth) return;
   const my = runId; talking(true); bgStart("คำตอบจาก "+(vault?.settings?.friendName||"Elity"));
   parts.forEach((p,i)=>{ const u=makeUtterance(p); if (i===parts.length-1) u.onend=()=>{ if (my===runId) { talking(false); bgStop(); } }; synth.speak(u); });
 }
@@ -484,7 +589,7 @@ function lock(){
     for (const id of ["noteTitle","noteBody","aiKey","setupKey","chatInput","ghToken","ghRepo","friendName","userCall","persona"]) $(id).value="";
     $("noteList").textContent=""; $("chatList").textContent=""; $("inboxList").textContent=""; $("inboxInput").value="";
     $("chatBox").hidden=true; $("inboxBox").hidden=true; $("newBanner").hidden=true; $("notesPane").hidden=true; $("editorPane").hidden=true;
-    $("acctBox").hidden=true; $("acctNone").hidden=false; $("syncBadge").hidden=true; $("friendGroup").hidden=true; $("ghGroup").hidden=true; $("sheetGroup").hidden=true; $("sheetStatus").textContent=""; $("sheetUrl").value=""; $("sheetKey").value="";
+    $("acctBox").hidden=true; $("acctNone").hidden=false; $("syncBadge").hidden=true; $("friendGroup").hidden=true; $("ghGroup").hidden=true; $("sheetGroup").hidden=true; $("gttsGroup").hidden=true; $("gttsKey").value=""; gFilled=false; $("sheetStatus").textContent=""; $("sheetUrl").value=""; $("sheetKey").value="";
     $("lockTitle").textContent="ล็อกแล้ว"; setMode("login"); showView(view);
   });
 }
@@ -503,9 +608,14 @@ document.addEventListener("visibilitychange",()=>{
 });
 
 /* ================= Settings ================= */
+let gFilled=false;
 function applySettingsUI(){
   if (!vault) return;
   const s=vault.settings;
+  $("gttsGroup").hidden=false;
+  $("gttsKey").value = s.gttsKey ? "••••••••" : "";
+  $("gttsOn").checked = s.gttsOn!==false;
+  if (!gFilled && s.gttsKey) { gFilled=true; fillGVoices(); }
   $("sheetGroup").hidden=false;
   if (document.activeElement!==$("sheetUrl")) $("sheetUrl").value=s.sheetUrl||"";
   $("sheetKey").value=s.sheetKey?"••••••••":"";
@@ -1073,6 +1183,33 @@ $("csvExportBtn").onclick=()=>{
   document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000);
   toast("ดาวน์โหลดไฟล์ CSV แล้ว เปิดใน Google Sheets ได้เลย");
 };
+
+/* --- Google voice settings --- */
+async function fillGVoices(){
+  const sel=$("gVoiceTh");
+  const opts=[]; const o0=document.createElement("option"); o0.value=""; o0.textContent="อัตโนมัติ (เลือกตามเพศเสียง)"; opts.push(o0);
+  if (!gKey()) { sel.replaceChildren(...opts); return; }
+  try {
+    const list=(await gVoicesFor("th-TH")).slice().sort((a,b)=>a.ssmlGender.localeCompare(b.ssmlGender)||vRank(a.name)-vRank(b.name)||a.name.localeCompare(b.name));
+    for (const v of list) { const o=document.createElement("option"); o.value=v.name; o.textContent=`${v.name.replace("th-TH-","")} · ${v.ssmlGender==="MALE"?"ชาย":v.ssmlGender==="FEMALE"?"หญิง":"ไม่ระบุ"}`; opts.push(o); }
+    sel.replaceChildren(...opts);
+    sel.value=vault.settings["gVoice_th-TH_"+gender]||"";
+    const m=list.filter(v=>v.ssmlGender==="MALE").length, f=list.filter(v=>v.ssmlGender==="FEMALE").length;
+    $("gttsStatus").textContent=`เชื่อมแล้ว · เสียงไทย ${f} หญิง / ${m} ชาย · อ่านต่อได้ตอนปิดจอ`;
+  } catch (e) { $("gttsStatus").textContent="ใช้ key นี้ไม่ได้: "+e.message; }
+}
+$("gttsSave").onclick=async()=>{
+  if (!vault) return toast("ปลดล็อกก่อน");
+  const k=$("gttsKey").value.trim();
+  const patch={ gttsOn: $("gttsOn").checked };
+  if (k && !k.startsWith("•")) patch.gttsKey=k;
+  if (!k) patch.gttsKey="";
+  updateSettings(patch); for (const x in gVoiceCache) delete gVoiceCache[x];
+  $("gttsStatus").textContent = patch.gttsKey===""? "ปิดเสียง Google แล้ว ใช้เสียงในเครื่อง" : "กำลังทดสอบ…";
+  if (gKey()) { await fillGVoices(); $("testVoice").click(); }
+};
+$("gttsOn").onchange=()=>{ if (vault) updateSettings({ gttsOn: $("gttsOn").checked }); };
+$("gVoiceTh").onchange=(e)=>{ if (vault) updateSettings({ ["gVoice_th-TH_"+gender]: e.target.value }); };
 
 /* ================= Backup ================= */
 function downloadFile(name, content){ const blob=new Blob([content],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000); }
