@@ -836,12 +836,64 @@ async function pushToSheet(n, src){
     if (n.files?.length && files.length < n.files.length) n.filesLost=true;
     await sheetPost({ source: src||"elity", text: n.rawText ?? n.text, files });
     n.sheet="ok"; n.updated=Date.now();
-    if (n.shareId) { dropShare(n.shareId); delete n.shareId; }
+    finishShare(n);
     changed(); renderInbox(); return true;
   } catch (e) { n.sheet="pending"; $("sheetStatus").textContent="ส่งเข้าชีตไม่สำเร็จ: "+e.message+" จะลองใหม่อัตโนมัติ"; return false; }
   finally { sheetBusy.delete(n.id); }
 }
+function finishShare(n){
+  if (n.shareId && (n.sheet==="ok" || !sheetReady()) && n.digest!=="pending") { dropShare(n.shareId); delete n.shareId; }
+}
+/* --- Read shared PDFs / images with Claude and keep the extracted content (encrypted) in the inbox item --- */
+const digestBusy=new Set();
+async function digestShare(n){
+  if (!n.shareId || !n.files?.length || n.digest==="done" || digestBusy.has(n.id)) return false;
+  const s=vault.settings;
+  if (!s.aiKey) { n.digest="pending"; return false; }
+  if (!navigator.onLine) { n.digest="pending"; return false; }
+  digestBusy.add(n.id); renderInbox();
+  try {
+    const c=await caches.open(SHARE_CACHE); const blocks=[]; const skipped=[];
+    for (const f of n.files) {
+      const r=await c.match(`__share/${n.shareId}/${f.i}`); if (!r) { skipped.push(f.name+" (ไฟล์หาย)"); continue; }
+      const blob=await r.blob(); const type=(f.type||blob.type||"").toLowerCase();
+      if (type==="application/pdf" || /\.pdf$/i.test(f.name)) {
+        if (blob.size>30*1024*1024) { skipped.push(f.name+" (ใหญ่เกิน 30MB)"); continue; }
+        blocks.push({ type:"document", source:{ type:"base64", media_type:"application/pdf", data: await blobToB64(blob) }, title:f.name });
+      } else if (/^image\/(jpeg|png|gif|webp)$/.test(type)) {
+        if (blob.size>5*1024*1024) { skipped.push(f.name+" (รูปใหญ่เกิน 5MB)"); continue; }
+        blocks.push({ type:"image", source:{ type:"base64", media_type:type, data: await blobToB64(blob) } });
+      } else if (/^text\//.test(type) || /\.(txt|csv|md)$/i.test(f.name)) {
+        blocks.push({ type:"text", text:"เนื้อหาไฟล์ "+f.name+":\n"+(await blob.text()).slice(0,60000) });
+      } else skipped.push(f.name+" (ยังอ่านไฟล์ชนิดนี้ไม่ได้)");
+    }
+    if (!blocks.length) { n.digest="done"; n.digestNote=skipped.join(", "); return false; }
+    const today=new Date().toLocaleDateString("th-TH",{dateStyle:"long",timeZone:"Asia/Bangkok"});
+    blocks.push({ type:"text", text:
+`วันนี้ ${today} ไฟล์นี้ถูกแชร์เข้ามาเป็นประกาศงาน${n.rawText?"\nข้อความที่มากับไฟล์: "+n.rawText:""}
+อ่านไฟล์ทั้งหมดแล้วสรุปเป็นภาษาไทย ข้อความธรรมดา ไม่ใช้ markdown ให้ค้นหาและตอบคำถามได้ภายหลัง:
+หัวเรื่อง: ...
+สรุป: รายละเอียดสำคัญครบถ้วน เช่น เงื่อนไข สินค้า รุ่น ราคา ส่วนลด สาขา ตัวเลข ชื่อคน
+ช่วงเวลา: วันเริ่ม - วันสิ้นสุด (ถ้ามี)
+ต้องทำ: สิ่งที่ผู้รับต้องทำ และเส้นตาย (ถ้ามี)
+คำค้น: คำสำคัญภาษาไทยและอังกฤษ คั่นด้วยจุลภาค
+ถ้าเป็นตารางตัวเลข ให้คัดตัวเลขสำคัญมาด้วย` });
+    const res=await fetch("https://api.anthropic.com/v1/messages",{ method:"POST", headers:{ "content-type":"application/json", "x-api-key":s.aiKey, "anthropic-version":"2023-06-01", "anthropic-dangerous-direct-browser-access":"true" },
+      body: JSON.stringify({ model:s.model||"claude-haiku-5-5", max_tokens:2500, messages:[{ role:"user", content:blocks }] }) });
+    const j=await res.json().catch(()=>null);
+    if (!res.ok) throw new Error(j?.error?.message||("HTTP "+res.status));
+    const out=(j.content||[]).filter(x=>x.type==="text").map(x=>x.text).join("").trim();
+    n.digestText=out; n.digest="done"; if (skipped.length) n.digestNote=skipped.join(", ");
+    n.text=[n.rawText, "📎 "+n.files.map(f=>f.name).join(", "), out ? "📄 สรุปจากไฟล์:\n"+out : ""].filter(Boolean).join("\n");
+    n.updated=Date.now(); changed(); return true;
+  } catch (e) { n.digest="pending"; n.digestErr=e.message; toast("อ่านไฟล์ไม่สำเร็จ: "+e.message+" จะลองใหม่อัตโนมัติ"); return false; }
+  finally { digestBusy.delete(n.id); finishShare(n); renderInbox(); }
+}
+async function flushDigest(){
+  for (const n of (vault?.inbox||[]).filter(x=>!x.deleted && x.shareId && x.digest==="pending")) await digestShare(n);
+}
 async function flushSheet(){
+  flushDigest();
   if (!sheetReady()) return 0;
   let sent=0;
   for (const n of (vault.inbox||[]).filter(x=>!x.deleted && x.sheet==="pending")) { if (await pushToSheet(n,"elity-retry")) sent++; }
@@ -861,13 +913,13 @@ async function savePendingShare(){
   const names=meta.files.map(f=>f.name);
   const shown=[meta.text, names.length ? "📎 "+names.join(", ") : ""].filter(Boolean).join("\n");
   if (!shown) { dropShare(id); return; }
-  const n={ id:crypto.randomUUID(), text:shown, rawText:meta.text, ts:meta.at||Date.now(), updated:Date.now(), sheet:"pending", files:meta.files, shareId: meta.files.length?id:undefined };
+  const hasFiles=meta.files.length>0;
+  const n={ id:crypto.randomUUID(), text:shown, rawText:meta.text, ts:meta.at||Date.now(), updated:Date.now(), sheet:"pending", files:meta.files, shareId: hasFiles?id:undefined, digest: hasFiles?"pending":undefined };
   vault.inbox.push(n); changed(); renderInbox(); showView("inbox");
-  if (!meta.files.length) dropShare(id);
-  if (meta.files.length && !sheetReady()) toast("เก็บข้อความแล้ว ไฟล์แนบจะส่งเข้า Google Sheet เมื่อตั้งค่าในหน้าตั้งค่า");
-  else toast(meta.files.length ? `เก็บแล้ว กำลังส่งไฟล์ ${meta.files.length} ไฟล์เข้าชีต…` : "เก็บประกาศที่แชร์มาแล้ว");
-  const ok=await pushToSheet(n,"share");
-  if (meta.files.length && ok) toast("ส่งไฟล์เข้าชีตแล้ว");
+  if (!hasFiles) { dropShare(id); toast("เก็บประกาศที่แชร์มาแล้ว"); pushToSheet(n,"share"); return; }
+  toast(vault.settings.aiKey ? "เก็บแล้ว Elity กำลังอ่านไฟล์…" : "เก็บไฟล์แล้ว ใส่ Anthropic API key เพื่อให้ Elity อ่านเนื้อหาไฟล์");
+  const [read]=await Promise.all([digestShare(n), pushToSheet(n,"share")]);
+  if (read) toast("Elity อ่านไฟล์และเก็บสรุปไว้แล้ว ถามได้เลย");
 }
 // Incoming share (Android share sheet → manifest share_target)
 (function readShare(){
@@ -902,7 +954,12 @@ function renderInbox(){
     const d=document.createElement("div"); d.className="it-head";
     const dt=document.createElement("span"); dt.className="it-d"; dt.textContent=fmtTime(n.ts); d.appendChild(dt);
     if (/@all/i.test(n.text)) { const p=document.createElement("span"); p.className="pill amber"; p.textContent="@all"; d.appendChild(p); }
-    if (n.files?.length) { const p=document.createElement("span"); p.className="pill"; p.textContent=`📎 ${n.files.length} ไฟล์${n.sheet==="ok"?" · อยู่ในชีต":" · รอส่ง"}`; d.appendChild(p); }
+    if (n.files?.length) {
+      const p=document.createElement("span"); p.className="pill"; p.textContent=`📎 ${n.files.length} ไฟล์${n.sheet==="ok"?" · อยู่ในชีต":" · รอส่งชีต"}`; d.appendChild(p);
+      const q=document.createElement("span"); q.className="pill amber";
+      q.textContent = n.digest==="done" ? (n.digestText?"อ่านไฟล์แล้ว":"อ่านไฟล์ไม่ได้") : digestBusy.has(n.id) ? "กำลังอ่านไฟล์…" : (n.shareId ? "รออ่านไฟล์" : "ยังไม่ได้อ่านไฟล์");
+      d.appendChild(q);
+    }
     if (/ด่วน|urgent/i.test(n.text)) { const p=document.createElement("span"); p.className="pill"; p.textContent="ด่วน"; d.appendChild(p); }
     const t=document.createElement("div"); t.className="it-t"; t.textContent=n.text; t.onclick=()=>t.classList.toggle("open");
     const a=document.createElement("div"); a.className="it-a";
