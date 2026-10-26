@@ -409,7 +409,7 @@ function onUnlocked(){
   $("acctBox").hidden=false; $("acctNone").hidden=true; $("acctName").textContent=acct.user;
   $("friendGroup").hidden=false; $("ghGroup").hidden=false;
   $("notesPane").hidden=false; $("editorPane").hidden=true; $("chatBox").hidden=false; $("inboxBox").hidden=false;
-  $("ghRepo").value=dev?.repo||""; $("ghToken").value=dev?.token?"••••••••":"";
+  $("ghRepo").value=dev?.repo||"mivre-me/elity-data"; $("ghToken").value=dev?.token?"••••••••":"";
   setSync("", dev ? (dirty?"รอซิงก์":"พร้อม") : "เก็บในเครื่องนี้");
   applySettingsUI(); refreshNotesUI(); renderInbox(); renderChat(); bumpActivity();
   savePendingShare(); updateBanner();
@@ -464,7 +464,9 @@ $("saveFriend").onclick=()=>{
   if (!k) patch.aiKey="";
   updateSettings(patch); toast("บันทึกแล้ว");
 };
-$("setupKeyBtn").onclick=()=>{ const k=$("setupKey").value.trim(); if (!k.startsWith("sk-")) return toast("key ต้องขึ้นต้นด้วย sk-"); $("setupKey").value=""; updateSettings({ aiKey:k }); toast("บันทึก key แล้ว คุยได้เลย"); };
+$("setupKeyBtn").onclick=()=>{ const k=$("setupKey").value.trim();
+  if (/^(github_pat_|ghp_)/.test(k)) { $("setupKey").value=""; showView("settings"); $("ghToken").value=k; $("ghRepo").focus(); return toast("นี่คือ GitHub token ย้ายไปใส่ในหัวข้อซิงก์ผ่าน GitHub ให้แล้ว กดบันทึกและทดสอบได้เลย"); }
+  if (!k.startsWith("sk-")) return toast("Anthropic key ต้องขึ้นต้นด้วย sk-ant-"); $("setupKey").value=""; updateSettings({ aiKey:k }); toast("บันทึก key แล้ว คุยได้เลย"); };
 $("autoSpeak").onchange=(e)=>updateSettings({ autoSpeak:e.target.checked });
 $("clearChat").onclick=()=>$("clearChatConfirm").hidden=false;
 $("clearChatNo").onclick=()=>$("clearChatConfirm").hidden=true;
@@ -473,7 +475,9 @@ $("ghSave").onclick=async()=>{
   const repo=$("ghRepo").value.trim(), tok=$("ghToken").value.trim();
   const token = tok.startsWith("•") ? dev?.token : tok;
   if (!repo && !tok) { dev=null; await saveDev(); $("ghStatus").textContent="ปิดการซิงก์แล้ว ข้อมูลเก็บเฉพาะเครื่องนี้"; setSync("","เก็บในเครื่องนี้"); return; }
-  if (!repoOk(repo) || !token) { $("ghStatus").textContent="กรอก repo ในรูปแบบ owner/repo และ token ให้ครบ"; return; }
+  if (!repo) { $("ghStatus").textContent="ช่อง Repo ยังว่าง พิมพ์ mivre-me/elity-data"; $("ghRepo").focus(); return; }
+  if (!repoOk(repo)) { $("ghStatus").textContent="รูปแบบ Repo ไม่ถูก ต้องเป็น ชื่อบัญชี/ชื่อrepo เช่น mivre-me/elity-data"; return; }
+  if (!token) { $("ghStatus").textContent="ช่อง GitHub token ยังว่าง"; return; }
   $("ghStatus").textContent="กำลังทดสอบ…";
   const problem=await ghCheck({repo, token}).catch(()=> "เชื่อมต่อ GitHub ไม่ได้");
   if (problem && !problem.startsWith("repo นี้เป็น Public")) { $("ghStatus").textContent=problem; return; }

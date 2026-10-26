@@ -69,7 +69,7 @@
         <details class="sub" id="ghDetails">
           <summary id="ghSummary">เครื่องใหม่? ดึงข้อมูลจาก GitHub</summary>
           <div class="form">
-            <label>Repo เก็บข้อมูล (owner/repo)<input id="authRepo" autocapitalize="none" spellcheck="false" placeholder="เช่น mivre-me/elity-data"></label>
+            <label>Repo เก็บข้อมูล (owner/repo)<input id="authRepo" autocapitalize="none" spellcheck="false" placeholder="พิมพ์ เช่น mivre-me/elity-data"></label>
             <label>GitHub token<input id="authToken" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…"></label>
           </div>
         </details>
@@ -214,7 +214,7 @@
     <section class="group" id="ghGroup" hidden>
       <h2>ซิงก์ผ่าน GitHub</h2>
       <p class="hint">เก็บข้อมูลที่เข้ารหัสแล้วไว้ใน repo ส่วนตัว (private) ของพี่ แล้วเปิดจากเครื่องไหนก็ได้</p>
-      <label>Repo เก็บข้อมูล (owner/repo)<input id="ghRepo" autocapitalize="none" spellcheck="false" placeholder="เช่น mivre-me/elity-data"></label>
+      <label>Repo เก็บข้อมูล (owner/repo)<input id="ghRepo" autocapitalize="none" spellcheck="false" placeholder="พิมพ์ เช่น mivre-me/elity-data"></label>
       <label>GitHub token<input id="ghToken" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…"></label>
       <div class="row"><button class="play small" id="ghSave" type="button">บันทึกและทดสอบ</button><button class="chip" id="syncNow" type="button">ซิงก์ตอนนี้</button></div>
       <p class="hint" id="ghStatus"></p>

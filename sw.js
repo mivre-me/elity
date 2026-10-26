@@ -1,4 +1,4 @@
-const VERSION = "elity-v3";
+const VERSION = "elity-v4";
 const ASSETS = [
   "./", "index.html", "app.css", "app.js", "manifest.webmanifest",
   "icon-192.png", "icon-512.png", "icon-maskable.png", "apple-touch-icon.png",
