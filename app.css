@@ -250,3 +250,5 @@ label b{font-weight:600;color:var(--fg);font-variant-numeric:tabular-nums}
   background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:12px;font-size:.88rem;max-width:calc(100% - 32px);box-shadow:var(--shadow);text-align:center}
 @media (min-width:760px){.tabbar{max-width:720px;margin:0 auto;border-radius:20px 20px 0 0;border-inline:1px solid var(--line)}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+
+.bg-row{display:grid;gap:6px}

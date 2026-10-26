@@ -148,26 +148,59 @@ function makeUtterance(text){
   u.rate=+$("rate").value; u.pitch=Math.max(0.1, Math.min(2, +$("pitch").value*r.pitchMul));
   return u;
 }
+/* --- Background playback helpers ---
+   A looping silent track + Media Session makes the phone treat Elity as a media app,
+   so reading keeps going when switching apps and shows lock-screen controls. */
+const keepAlive = new Audio("silence.wav"); keepAlive.loop=true; keepAlive.preload="auto";
+const MS = "mediaSession" in navigator ? navigator.mediaSession : null;
+let wakeLock=null;
+async function wakeOn(){ if (!$("keepAwake").checked || !("wakeLock" in navigator) || wakeLock) return; try { wakeLock=await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release",()=>{ wakeLock=null; }); } catch {} }
+function wakeOff(){ try { wakeLock?.release(); } catch {} wakeLock=null; }
+function setMeta(title){
+  if (!MS) return;
+  try { MS.metadata=new MediaMetadata({ title: title.slice(0,80), artist:"Elity · อ่านให้ฟัง", artwork:[{ src:"icon-512.png", sizes:"512x512", type:"image/png" }] }); } catch {}
+}
+function bgStart(title){ keepAlive.play().catch(()=>{}); setMeta(title); if (MS) MS.playbackState="playing"; wakeOn(); }
+function bgPause(){ keepAlive.pause(); if (MS) MS.playbackState="paused"; }
+function bgStop(){ keepAlive.pause(); if (MS) { MS.playbackState="none"; try { MS.metadata=null; } catch {} } wakeOff(); }
+if (MS) {
+  const h=(a,f)=>{ try { MS.setActionHandler(a,f); } catch {} };
+  h("play", ()=>{ if (state==="paused") resumeReading(); else if (state==="idle" && chunks.length) speakFrom(idx); });
+  h("pause", ()=>{ if (state==="playing") pauseReading(); else if (talkingNow) stopReading(); });
+  h("stop", ()=>stopReading());
+  h("nexttrack", ()=>{ if (chunks.length && idx<chunks.length-1) speakFrom(idx+1); });
+  h("previoustrack", ()=>{ if (chunks.length) speakFrom(Math.max(0,idx-1)); });
+}
+document.addEventListener("visibilitychange",()=>{ if (document.visibilityState==="visible" && (state==="playing"||talkingNow)) wakeOn(); });
+
 function speakFrom(i){
   if (!synth || !chunks.length) return;
   const my=++runId; synth.cancel(); idx=i; state="playing"; mark(); talking(false);
-  const say=()=>{
+  bgStart(chunks[i]);
+  // Queue every remaining sentence now so the phone's speech engine keeps going
+  // even if the page is throttled in the background.
+  setTimeout(()=>{
     if (my!==runId) return;
-    if (idx>=chunks.length) { state="idle"; idx=0; mark(); return; }
-    const u=makeUtterance(chunks[idx]);
-    u.onend=()=>{ if (my!==runId||state!=="playing") return; idx++; mark(); say(); };
-    u.onerror=(e)=>{ if (my!==runId) return; if (e.error!=="interrupted"&&e.error!=="canceled") { idx++; say(); } };
-    synth.speak(u);
-  };
-  setTimeout(say,60);
+    for (let k=i;k<chunks.length;k++) {
+      const u=makeUtterance(chunks[k]);
+      u.onstart=()=>{ if (my!==runId) return; idx=k; mark(); setMeta(chunks[k]); };
+      if (k===chunks.length-1) u.onend=()=>{ if (my!==runId) return; state="idle"; idx=0; mark(); bgStop(); };
+      synth.speak(u);
+    }
+  },60);
+}
+function pauseReading(){ synth.pause(); state="paused"; mark(); bgPause(); }
+function resumeReading(){
+  state="playing"; synth.resume(); mark(); bgStart(chunks[idx]||"");
+  setTimeout(()=>{ if (state==="playing" && !synth.speaking) speakFrom(idx); },350);
 }
 playBtn.onclick=()=>{
   if (!synth) return;
-  if (state==="playing") { synth.pause(); state="paused"; mark(); return; }
-  if (state==="paused") { state="playing"; synth.resume(); mark(); setTimeout(()=>{ if (state==="playing"&&!synth.speaking) speakFrom(idx); },300); return; }
+  if (state==="playing") return pauseReading();
+  if (state==="paused") return resumeReading();
   render(); speakFrom(idx);
 };
-function stopReading(){ runId++; synth&&synth.cancel(); state="idle"; idx=0; mark(); talking(false); }
+function stopReading(){ runId++; synth&&synth.cancel(); state="idle"; idx=0; mark(); talking(false); bgStop(); }
 $("stopBtn").onclick=stopReading;
 $("nextBtn").onclick=()=>{ if (idx<chunks.length-1) speakFrom(idx+1); };
 $("prevBtn").onclick=()=>speakFrom(Math.max(0,idx-1));
@@ -183,17 +216,20 @@ for (const k of ["rate","pitch"]) {
   el.addEventListener("change",()=>{ if (state==="playing") speakFrom(idx); });
   show();
 }
+$("keepAwake").checked = store.get("sa_awake")==="1";
+$("keepAwake").onchange=(e)=>{ store.set("sa_awake", e.target.checked?"1":"0"); if (e.target.checked && state==="playing") wakeOn(); if (!e.target.checked) wakeOff(); };
 $("testVoice").onclick=()=>{ if (!synth) return; stopReading(); synth.speak(makeUtterance(gender==="male"?"สวัสดีครับ นี่คือเสียงที่เลือกไว้":"สวัสดีค่ะ นี่คือเสียงที่เลือกไว้")); };
 
 // Speak a reply (used by chat)
-function talking(on){ $("stopTalk").hidden=!on; }
+let talkingNow=false;
+function talking(on){ talkingNow=on; $("stopTalk").hidden=!on; }
 function speakPlain(text){
   if (!synth) return;
   stopReading();
   const clean = text.replace(/[*_#`>|]/g," ").replace(/\[(.*?)\]\(.*?\)/g,"$1");
   const parts = split(clean); if (!parts.length) return;
-  const my = runId; talking(true);
-  parts.forEach((p,i)=>{ const u=makeUtterance(p); if (i===parts.length-1) u.onend=()=>{ if (my===runId) talking(false); }; synth.speak(u); });
+  const my = runId; talking(true); bgStart("คำตอบจาก "+(vault?.settings?.friendName||"Elity"));
+  parts.forEach((p,i)=>{ const u=makeUtterance(p); if (i===parts.length-1) u.onend=()=>{ if (my===runId) { talking(false); bgStop(); } }; synth.speak(u); });
 }
 $("stopTalk").onclick=stopReading;
 
