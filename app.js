@@ -512,6 +512,7 @@ function applySettingsUI(){
   if (!$("sheetStatus").textContent) { const p=(vault.inbox||[]).filter(x=>!x.deleted&&x.sheet==="pending").length; $("sheetStatus").textContent = sheetReady() ? (p?`มีประกาศรอส่งเข้าชีต ${p} รายการ`:"เชื่อมกับชีตแล้ว") : "ยังไม่ได้ตั้งค่า"; }
   if (document.activeElement!==$("friendName")) $("friendName").value=s.friendName||"Elity";
   if (document.activeElement!==$("userCall")) $("userCall").value=s.userCall||"";
+  if (document.activeElement!==$("myPic")) $("myPic").value=s.myPic||"MEELAP";
   if (document.activeElement!==$("persona")) $("persona").value=s.persona||"";
   $("model").value=s.model||"claude-haiku-5-5";
   $("aiKey").value = s.aiKey ? "••••••••" : "";
@@ -524,7 +525,7 @@ function applySettingsUI(){
 function updateSettings(patch){ Object.assign(vault.settings, patch, { updated: Date.now() }); changed(); applySettingsUI(); }
 $("saveFriend").onclick=()=>{
   const k=$("aiKey").value.trim();
-  const patch={ friendName:$("friendName").value.trim()||"Elity", userCall:$("userCall").value.trim(), persona:$("persona").value.trim(), model:$("model").value, shareNotes:$("shareNotes").checked };
+  const patch={ myPic:($("myPic").value.trim()||"MEELAP").toUpperCase(), friendName:$("friendName").value.trim()||"Elity", userCall:$("userCall").value.trim(), persona:$("persona").value.trim(), model:$("model").value, shareNotes:$("shareNotes").checked };
   if (k && !k.startsWith("•")) patch.aiKey=k;
   if (!k) patch.aiKey="";
   updateSettings(patch); toast("บันทึกแล้ว");
@@ -630,9 +631,9 @@ function greeting(){
 }
 const SUGGEST=[
   { t:"สรุปประกาศล่าสุด", d:"3 วันที่ผ่านมามีอะไรบ้าง", q:"สรุปประกาศ 3 วันล่าสุดให้หน่อย เรื่องไหนต้องทำอะไรบ้าง" },
+  { t:"ยอดขายเดือนนี้", d:"เทียบงบ ทุกสาขาในกลุ่ม", q:"สรุปยอดขายเดือนนี้ของกลุ่มผมเทียบงบ สาขาไหนต้องเร่ง และต้องขายวันละเท่าไหร่" },
   { t:"เดือนนี้มีโปรอะไร", d:"ค้นจากประกาศที่เก็บไว้", q:"เดือนนี้มีโปรโมชั่นอะไรบ้าง" },
   { t:"จดโน้ตให้หน่อย", d:"พูดหรือพิมพ์สิ่งที่อยากจำ", fill:"จดไว้หน่อย: " },
-  { t:"วันนี้ต้องทำอะไร", d:"ดูจากโน้ตและประกาศ", q:"วันนี้มีอะไรที่ต้องทำหรือต้องจำบ้าง ดูจากโน้ตและประกาศ" },
 ];
 function renderHero(){
   const s=vault.settings;
@@ -663,8 +664,27 @@ const TOOLS=[
   { name:"list_recent_notes", description:"ดูโน้ตล่าสุดของผู้ใช้ 10 รายการ", input_schema:{ type:"object", properties:{} } },
   { name:"search_announcements", description:"ค้นประกาศงานที่ผู้ใช้เก็บไว้ (เช่น โปรโมชั่น สต็อก พนักงาน ตารางงาน นโยบาย) ใช้ทุกครั้งที่ถามเรื่องงานหรือเรื่องที่น่าจะมีประกาศ ลองค้นหลายคำได้", input_schema:{ type:"object", properties:{ query:{type:"string", description:"คำค้น คั่นด้วยเว้นวรรค ตรงคำใดคำหนึ่งก็นับ"} }, required:["query"] } },
   { name:"list_recent_announcements", description:"ดูประกาศล่าสุดตามจำนวนวันย้อนหลัง ใช้เมื่อผู้ใช้ขอสรุปประกาศใหม่หรือประกาศช่วงนี้", input_schema:{ type:"object", properties:{ days:{type:"number", description:"ย้อนหลังกี่วัน ค่าเริ่มต้น 7"} } } },
+  { name:"get_sales_kpis", description:"ดึงตัวเลขยอดขายจริงจากชีต MeeGo (Power BI) เทียบ Budget: sales, budget, achPct (เทียบงบถึงวันที่ to), monthBudget/monthAchPct (เทียบงบทั้งเดือน), needPerDay (ต้องขายวันละเท่าไหร่ถึงจะถึงงบเดือน), bills, footfall, convPct, atv, gmPct, newCxMTD และยอดแยกหมวดสินค้า ใช้ทุกครั้งที่ถามเรื่องยอดขาย งบ เป้า สาขา footfall conversion ATV ลูกค้าใหม่ หรือขอวิเคราะห์/เปรียบเทียบผลงาน", input_schema:{ type:"object", properties:{
+      from:{type:"string", description:"YYYY-MM-DD ถ้าไม่ใส่ = วันที่ 1 ของเดือนข้อมูลล่าสุด"},
+      to:{type:"string", description:"YYYY-MM-DD ถ้าไม่ใส่ = วันล่าสุดที่มีข้อมูล"},
+      scope:{type:"string", description:"ชื่อ PIC เช่น MEELAP, AOM, BOW, CHAMP, CHOCK, JUJI, KO, MINK หรือ ALL = ทุกสาขา (ได้ byPic เทียบกลุ่ม) ค่าเริ่มต้น = กลุ่มของผู้ใช้"},
+      stores:{type:"array", items:{type:"string"}, description:"รหัสสาขาเฉพาะ เช่น [\"205\",\"275\"] (ถ้าใส่จะไม่ใช้ scope)"},
+      by:{type:"string", enum:["store","day"], description:"day = เพิ่มยอดรายวัน (byDay) ไว้ดูแนวโน้ม"} } } },
 ];
+async function salesTool(input){
+  if (!sheetReady()) return "ยังเชื่อม Google Sheet ไม่ได้ ให้ผู้ใช้ไปตั้งค่า 'ส่งประกาศเข้า Google Sheet' (ลิงก์ Apps Script + รหัสลับ) ก่อน";
+  if (!navigator.onLine) return "ออฟไลน์อยู่ ดึงยอดขายไม่ได้";
+  try {
+    const p={ action:"meego", scope: input.scope || vault.settings.myPic || "MEELAP" };
+    for (const k of ["from","to","by"]) if (input[k]) p[k]=input[k];
+    if (Array.isArray(input.stores) && input.stores.length) p.stores=input.stores;
+    const j=await sheetPost(p);
+    if (j.stores===undefined) return "Apps Script ยังไม่รองรับการดึงยอดขาย (ต้องกด Deploy เวอร์ชันใหม่ของโปรเจกต์ Elity ก่อน)";
+    const t=JSON.stringify(j); return t.length>24000 ? t.slice(0,24000)+"…(ตัดข้อมูลบางส่วน)" : t;
+  } catch (e) { return "ดึงยอดขายไม่สำเร็จ: "+e.message; }
+}
 function runTool(name, input){
+  if (name==="get_sales_kpis") return salesTool(input);
   const live=vault.notes.filter(n=>!n.deleted);
   if (name==="save_note") { const n=addNote(String(input.title||"").slice(0,120), String(input.body||"")); return `บันทึกแล้ว (id ${n.id.slice(0,8)})`; }
   if (name==="search_notes") {
@@ -697,6 +717,7 @@ function systemPrompt(){
     "พูดภาษาไทยเป็นกันเอง อบอุ่น จริงใจ ตอบกระชับ ถ้าผู้ใช้พูดภาษาอังกฤษให้ตอบภาษาอังกฤษ",
     "คำตอบอาจถูกอ่านออกเสียง จึงตอบเป็นข้อความธรรมดา ไม่ใช้ markdown ไม่ใช้หัวข้อ ตาราง หรือสัญลักษณ์ * #",
     "เป็นเพื่อนที่ดีคือซื่อตรง ถ้าไม่แน่ใจให้บอกตรงๆ ไม่แต่งข้อมูล ถ้าผู้ใช้เครียดหรือเหนื่อย รับฟังและชวนดูแลตัวเอง",
+    `ผู้ใช้เป็น Area Supervisor ร้านแว่นตา ดูแลสาขากลุ่ม PIC ${s.myPic||"MEELAP"} เมื่อถามเรื่องยอดขาย งบ เป้า footfall conversion ATV ลูกค้าใหม่ หรือขอวิเคราะห์ ให้เรียก get_sales_kpis เสมอ ห้ามเดาตัวเลข บอกว่าข้อมูลถึงวันที่เท่าไหร่ (dataUpTo) ตอบตัวเลขแบบมีหน่วยและจัดรูปให้อ่านง่าย (เช่น 1.82 ล้าน, 94%) แล้วสรุปข้อสังเกต สาขาที่ต้องเร่ง และสิ่งที่ควรทำ แบบสั้นพร้อมส่งต่อให้ผู้จัดการสาขาได้`,
     s.shareNotes!==false ? "คุณค้นประกาศได้ด้วย search_announcements และ list_recent_announcements และเข้าถึงสมุดโน้ตของผู้ใช้ได้ด้วยเครื่องมือ save_note, search_notes, list_recent_notes เมื่อผู้ใช้ขอให้จดหรือจำ ให้บันทึกทันทีแล้วยืนยันสั้นๆ เมื่อถามถึงเรื่องที่เคยบอก ให้ค้นโน้ตก่อนตอบ" : "",
     s.persona ? "นิสัยและวิธีพูดที่ผู้ใช้อยากให้เป็น: "+s.persona : "",
   ].filter(Boolean).join("\n");
@@ -713,7 +734,7 @@ function historyForApi(){
 }
 async function callClaude(messages){
   const s=vault.settings;
-  const body={ model:s.model||"claude-haiku-5-5", max_tokens:1024, system:systemPrompt(), messages };
+  const body={ model:s.model||"claude-haiku-5-5", max_tokens:2048, system:systemPrompt(), messages };
   if (s.shareNotes!==false) body.tools=TOOLS;
   const res=await fetch("https://api.anthropic.com/v1/messages",{ method:"POST", headers:{ "content-type":"application/json", "x-api-key":s.aiKey, "anthropic-version":"2023-06-01", "anthropic-dangerous-direct-browser-access":"true" }, body:JSON.stringify(body) });
   const j=await res.json().catch(()=>null);
@@ -744,7 +765,8 @@ async function ask(text){
       const uses=r.content.filter(c=>c.type==="tool_use");
       if (r.stop_reason!=="tool_use" || !uses.length) { reply=texts; break; }
       messages.push({ role:"assistant", content:r.content });
-      messages.push({ role:"user", content: uses.map(u=>({ type:"tool_result", tool_use_id:u.id, content: runTool(u.name, u.input||{}) })) });
+      const results=await Promise.all(uses.map(async u=>({ type:"tool_result", tool_use_id:u.id, content: String(await runTool(u.name, u.input||{})) })));
+      messages.push({ role:"user", content: results });
       if (texts) reply=texts;
     }
     typing.remove();
