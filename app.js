@@ -352,7 +352,7 @@ async function sync(){
       if (put.status===200) { remoteSha=put.sha; dirty=false; break; }
       if (put.status!==409 && put.status!==422) throw new Error("gh "+put.status);
     }
-    await saveLocal(); refreshNotesUI(); renderInbox(); renderChat(); applySettingsUI(); updateBanner();
+    await saveLocal(); refreshNotesUI(); renderInbox(); renderChat(); applySettingsUI(); updateBanner(); flushSheet();
     setSync("ok", "ซิงก์แล้ว "+new Date().toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit"}));
   } catch (e) {
     setSync("bad", String(e.message).includes("401") ? "token GitHub ใช้ไม่ได้" : "ซิงก์ไม่สำเร็จ · เก็บไว้ในเครื่อง");
@@ -459,7 +459,7 @@ function lock(){
     for (const id of ["noteTitle","noteBody","aiKey","setupKey","chatInput","ghToken","ghRepo","friendName","userCall","persona"]) $(id).value="";
     $("noteList").textContent=""; $("chatList").textContent=""; $("inboxList").textContent=""; $("inboxInput").value="";
     $("chatBox").hidden=true; $("inboxBox").hidden=true; $("newBanner").hidden=true; $("notesPane").hidden=true; $("editorPane").hidden=true;
-    $("acctBox").hidden=true; $("acctNone").hidden=false; $("syncBadge").hidden=true; $("friendGroup").hidden=true; $("ghGroup").hidden=true;
+    $("acctBox").hidden=true; $("acctNone").hidden=false; $("syncBadge").hidden=true; $("friendGroup").hidden=true; $("ghGroup").hidden=true; $("sheetGroup").hidden=true; $("sheetStatus").textContent=""; $("sheetUrl").value=""; $("sheetKey").value="";
     $("lockTitle").textContent="ล็อกแล้ว"; setMode("login"); showView(view);
   });
 }
@@ -481,6 +481,10 @@ document.addEventListener("visibilitychange",()=>{
 function applySettingsUI(){
   if (!vault) return;
   const s=vault.settings;
+  $("sheetGroup").hidden=false;
+  if (document.activeElement!==$("sheetUrl")) $("sheetUrl").value=s.sheetUrl||"";
+  $("sheetKey").value=s.sheetKey?"••••••••":"";
+  if (!$("sheetStatus").textContent) { const p=(vault.inbox||[]).filter(x=>!x.deleted&&x.sheet==="pending").length; $("sheetStatus").textContent = sheetReady() ? (p?`มีประกาศรอส่งเข้าชีต ${p} รายการ`:"เชื่อมกับชีตแล้ว") : "ยังไม่ได้ตั้งค่า"; }
   if (document.activeElement!==$("friendName")) $("friendName").value=s.friendName||"Elity";
   if (document.activeElement!==$("userCall")) $("userCall").value=s.userCall||"";
   if (document.activeElement!==$("persona")) $("persona").value=s.persona||"";
@@ -754,8 +758,34 @@ function addInbox(text){
   const t=String(text).trim(); if (!t) return null;
   const dup=(vault.inbox||[]).find(n=>!n.deleted && n.text===t);
   if (dup) return dup;
-  const n={ id:crypto.randomUUID(), text:t, ts:Date.now(), updated:Date.now() };
-  vault.inbox.push(n); changed(); renderInbox(); return n;
+  const n={ id:crypto.randomUUID(), text:t, ts:Date.now(), updated:Date.now(), sheet:"pending" };
+  vault.inbox.push(n); changed(); renderInbox(); pushToSheet(n, "elity");
+  return n;
+}
+/* --- Copy announcements to the old Elity Brain sheet (Apps Script) --- */
+const sheetReady=()=>!!(vault?.settings?.sheetUrl && vault?.settings?.sheetKey);
+async function sheetPost(payload){
+  const s=vault.settings;
+  const r=await fetch(s.sheetUrl,{ method:"POST", body: JSON.stringify({ key:s.sheetKey, ...payload }) });
+  let j=null; try { j=await r.json(); } catch {}
+  if (!j || !j.ok) throw new Error((j && j.error) || "ชีตไม่ตอบรับ ("+r.status+")");
+  return j;
+}
+const sheetBusy=new Set();
+async function pushToSheet(n, src){
+  if (!sheetReady() || !navigator.onLine || sheetBusy.has(n.id)) return false;
+  sheetBusy.add(n.id);
+  try {
+    await sheetPost({ source: src||"elity", text: n.text, files: [] });
+    n.sheet="ok"; n.updated=Date.now(); changed(); return true;
+  } catch (e) { n.sheet="pending"; $("sheetStatus").textContent="ส่งเข้าชีตไม่สำเร็จ: "+e.message+" จะลองใหม่อัตโนมัติ"; return false; }
+  finally { sheetBusy.delete(n.id); }
+}
+async function flushSheet(){
+  if (!sheetReady()) return 0;
+  let sent=0;
+  for (const n of (vault.inbox||[]).filter(x=>!x.deleted && x.sheet==="pending")) { if (await pushToSheet(n,"elity-retry")) sent++; }
+  return sent;
 }
 function savePendingShare(){
   const t=ss.get(PENDING); if (!t || !vault) return;
@@ -876,6 +906,37 @@ $("elityFile").onchange=async(e)=>{
     changed(); renderInbox();
     toast(added ? `นำเข้าประกาศจาก Elity แล้ว ${added} รายการ` : "ไม่มีประกาศใหม่ในไฟล์นี้");
   } catch { toast("อ่านไฟล์ CSV ไม่ได้"); }
+};
+
+$("sheetSave").onclick=()=>{
+  const url=$("sheetUrl").value.trim(), k=$("sheetKey").value.trim();
+  if (url && !/^https:\/\/script\.google(usercontent)?\.com\/.+/.test(url)) { $("sheetStatus").textContent="ลิงก์ต้องขึ้นต้นด้วย https://script.google.com/"; return; }
+  const patch={ sheetUrl:url };
+  if (k && !k.startsWith("•")) patch.sheetKey=k;
+  if (!k) patch.sheetKey="";
+  updateSettings(patch); $("sheetStatus").textContent = (patch.sheetUrl && (patch.sheetKey||vault.settings.sheetKey)) ? "บันทึกแล้ว กด ส่งแถวทดสอบ เพื่อเช็ก" : "บันทึกแล้ว (ปิดการส่งเข้าชีต)";
+};
+$("sheetTest").onclick=async()=>{
+  if (!sheetReady()) { $("sheetStatus").textContent="ใส่ลิงก์และรหัสลับ แล้วกดบันทึกก่อน"; return; }
+  $("sheetStatus").textContent="กำลังส่งแถวทดสอบ…";
+  try { await sheetPost({ source:"elity-test", text:"ทดสอบจาก Elity ตัวใหม่ "+new Date().toLocaleString("th-TH"), files:[] }); $("sheetStatus").textContent="ส่งสำเร็จ ไปดูในชีตได้เลย ประกาศใหม่จะเข้าชีตอัตโนมัติ"; }
+  catch (e) { $("sheetStatus").textContent="ส่งไม่สำเร็จ: "+e.message+" (เช็กลิงก์และรหัสลับอีกครั้ง)"; }
+};
+$("sheetResend").onclick=async()=>{
+  if (!sheetReady()) { $("sheetStatus").textContent="ใส่ลิงก์และรหัสลับก่อน"; return; }
+  $("sheetStatus").textContent="กำลังส่ง…"; const n=await flushSheet();
+  const left=(vault.inbox||[]).filter(x=>!x.deleted&&x.sheet==="pending").length;
+  $("sheetStatus").textContent=`ส่งแล้ว ${n} รายการ${left?` · ยังค้าง ${left}`:""}`;
+};
+addEventListener("online", ()=>{ if (acct) flushSheet(); });
+$("csvExportBtn").onclick=()=>{
+  if (!vault) return;
+  const esc=(v)=>'"'+String(v).replace(/"/g,'""')+'"';
+  const rows=[["วันเวลา","ประกาศ"]].concat((vault.inbox||[]).filter(n=>!n.deleted).sort((a,b)=>a.ts-b.ts).map(n=>[new Date(n.ts).toLocaleString("th-TH"), n.text]));
+  const blob=new Blob(["\ufeff"+rows.map(r=>r.map(esc).join(",")).join("\r\n")],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`elity-announcements-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000);
+  toast("ดาวน์โหลดไฟล์ CSV แล้ว เปิดใน Google Sheets ได้เลย");
 };
 
 /* ================= Backup ================= */

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.github.com https://api.anthropic.com; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.github.com https://api.anthropic.com https://script.google.com https://script.googleusercontent.com; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <title>Elity</title>
 <meta name="description" content="Elity เพื่อนและผู้ช่วยส่วนตัว เก็บประกาศ อ่านออกเสียง และโน้ตเข้ารหัส">
@@ -219,6 +219,23 @@
       <p class="hint" id="voiceHelp"></p>
     </section>
 
+    <section class="group" id="sheetGroup" hidden>
+      <h2>ส่งประกาศเข้า Google Sheet</h2>
+      <p class="hint">ทุกประกาศที่เก็บใน Elity จะส่งสำเนาเข้าชีต Elity Brain ด้วย เปิดดูในชีตได้เหมือน Elity ตัวแรก (สำเนาในชีตไม่ได้เข้ารหัส) โน้ตกับแชตไม่ถูกส่ง</p>
+      <label>ลิงก์ Apps Script (…/exec)<input id="sheetUrl" type="url" autocapitalize="none" spellcheck="false" placeholder="https://script.google.com/macros/s/…/exec"></label>
+      <label>รหัสลับ<input id="sheetKey" type="password" autocomplete="off" spellcheck="false"></label>
+      <div class="row"><button class="play small" id="sheetSave" type="button">บันทึก</button><button class="chip" id="sheetTest" type="button">ส่งแถวทดสอบ</button><button class="chip" id="sheetResend" type="button">ส่งประกาศที่ค้าง</button></div>
+      <p class="hint" id="sheetStatus"></p>
+      <details class="sub"><summary>เอาลิงก์กับรหัสลับจากไหน</summary>
+        <ol class="steps">
+          <li>เปิดแอพ Elity ตัวเก่า (ไอคอนตัว E สีส้ม) → ตั้งค่า</li>
+          <li>คัดลอกลิงก์ Apps Script มาวางช่องแรก แล้วคัดลอกรหัสลับมาวางช่องที่สอง</li>
+          <li>กดบันทึก แล้วกด "ส่งแถวทดสอบ" ไปดูในชีตว่ามีแถวทดสอบขึ้นไหม</li>
+          <li>ตั้งครั้งเดียวพอ ค่านี้ซิงก์ไปทุกเครื่องแบบเข้ารหัส</li>
+        </ol>
+      </details>
+    </section>
+
     <section class="group" id="ghGroup" hidden>
       <h2>ซิงก์ผ่าน GitHub</h2>
       <p class="hint">เก็บข้อมูลที่เข้ารหัสแล้วไว้ใน repo ส่วนตัว (private) ของพี่ แล้วเปิดจากเครื่องไหนก็ได้</p>
@@ -255,6 +272,7 @@
           <button class="chip" id="importBtn" type="button">นำเข้าไฟล์สำรอง</button>
           <input type="file" id="importFile" accept=".mrvault,application/json" hidden>
           <button class="chip" id="elityImportBtn" type="button">นำเข้าประกาศจาก Elity เดิม (CSV)</button>
+          <button class="chip" id="csvExportBtn" type="button"><svg class="ic"><use href="#i-file"/></svg>ส่งออกประกาศเป็น CSV</button>
           <input type="file" id="elityFile" accept=".csv,text/csv" hidden>
         </div>
         <p class="hint">Elity เดิม: เปิดชีต Elity Brain → แท็บ Inbox → ไฟล์ → ดาวน์โหลด → CSV แล้วนำเข้าที่นี่</p>
