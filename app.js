@@ -184,7 +184,7 @@ const useCloud=()=> !!gKey() && navigator.onLine && Date.now()>cloudFailUntil;
 const gVoiceCache={};
 async function gVoicesFor(lang){
   if (gVoiceCache[lang]) return gVoiceCache[lang];
-  const r=await fetch(`${GT}/voices?languageCode=${lang}&key=${encodeURIComponent(gKey())}`);
+  const r=await fetch(`${GT}/voices?languageCode=${lang}&key=${encodeURIComponent(gKey())}`,{ referrerPolicy:"origin" });
   const j=await r.json().catch(()=>({}));
   if (!r.ok) throw new Error(j?.error?.message||("HTTP "+r.status));
   return gVoiceCache[lang]=(j.voices||[]).filter(v=>(v.languageCodes||[]).includes(lang));
@@ -220,7 +220,7 @@ async function gSynth(text){
   const ac={ audioEncoding:"MP3", speakingRate: Math.min(4,Math.max(0.25,rate)) };
   if (!/Chirp/.test(v.name)) ac.pitch=Math.max(-20,Math.min(20,(pitch-1)*16));
   const job=(async()=>{
-    const r=await fetch(`${GT}/text:synthesize?key=${encodeURIComponent(gKey())}`,{ method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ input:{ text }, voice:{ languageCode:lang, name:v.name }, audioConfig:ac }) });
+    const r=await fetch(`${GT}/text:synthesize?key=${encodeURIComponent(gKey())}`,{ method:"POST", referrerPolicy:"origin", headers:{ "content-type":"application/json" }, body: JSON.stringify({ input:{ text }, voice:{ languageCode:lang, name:v.name }, audioConfig:ac }) });
     const j=await r.json().catch(()=>({}));
     if (!r.ok) throw new Error(j?.error?.message||("HTTP "+r.status));
     addUsage(v.name, text.length);
