@@ -190,12 +190,26 @@ async function gVoicesFor(lang){
   return gVoiceCache[lang]=(j.voices||[]).filter(v=>(v.languageCodes||[]).includes(lang));
 }
 const vRank=(n)=>/Chirp3-HD/.test(n)?0:/Chirp-HD/.test(n)?1:/Neural2/.test(n)?2:/Wavenet/.test(n)?3:/Standard/.test(n)?4:5;
+/* Free-tier guard: stop each voice tier just under Google's monthly free quota, then step down to a cheaper tier, then the device voice */
+const tierOf=(n)=>/Chirp/.test(n)?"chirp":/Neural2|Polyglot/.test(n)?"neural2":/Studio/.test(n)?"studio":"standard";
+const TIER_CAP={ chirp:950000, neural2:950000, studio:95000, standard:3900000 };
+const monthKey=()=>new Date().toLocaleDateString("en-CA",{timeZone:"America/Los_Angeles"}).slice(0,7);
+function ttsUsage(){ const u=vault?.settings?.ttsUsage; return (u && u.m===monthKey()) ? u : { m:monthKey(), chirp:0, neural2:0, studio:0, standard:0 }; }
+const tierOk=(n)=> ttsUsage()[tierOf(n)] + 0 < TIER_CAP[tierOf(n)];
+let usageT=null;
+function addUsage(name, chars){
+  const u=ttsUsage(); u[tierOf(name)]=(u[tierOf(name)]||0)+chars;
+  vault.settings.ttsUsage=u; clearTimeout(usageT); usageT=setTimeout(()=>{ vault.settings.updated=Date.now(); changed(); },3000);
+}
 async function gPick(lang){
   const list=await gVoicesFor(lang); if (!list.length) throw new Error("ไม่มีเสียง "+lang);
-  const pref=vault.settings["gVoice_"+lang+"_"+gender]; const hit=pref && list.find(v=>v.name===pref); if (hit) return hit;
+  const pref=vault.settings["gVoice_"+lang+"_"+gender]; const hit=pref && list.find(v=>v.name===pref); if (hit && tierOk(hit.name)) return hit;
   const want=gender==="male"?"MALE":"FEMALE";
+  const ok=list.filter(v=>tierOk(v.name));
+  if (!ok.length) throw new Error("ใช้โควตาฟรีเดือนนี้ครบแล้ว");
   const ranked=(arr)=>arr.slice().sort((a,b)=>vRank(a.name)-vRank(b.name)||a.name.localeCompare(b.name));
-  return ranked(list.filter(v=>v.ssmlGender===want))[0] || ranked(list)[0];
+  const sameTier=hit ? ranked(ok.filter(v=>v.ssmlGender===want)) : [];
+  return sameTier[0] || ranked(ok.filter(v=>v.ssmlGender===want))[0] || ranked(ok)[0];
 }
 const audioCache=new Map();
 async function gSynth(text){
@@ -209,6 +223,7 @@ async function gSynth(text){
     const r=await fetch(`${GT}/text:synthesize?key=${encodeURIComponent(gKey())}`,{ method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ input:{ text }, voice:{ languageCode:lang, name:v.name }, audioConfig:ac }) });
     const j=await r.json().catch(()=>({}));
     if (!r.ok) throw new Error(j?.error?.message||("HTTP "+r.status));
+    addUsage(v.name, text.length);
     return URL.createObjectURL(new Blob([unb64(j.audioContent)],{ type:"audio/mpeg" }));
   })();
   audioCache.set(key, job); job.catch(()=>audioCache.delete(key));
@@ -1195,7 +1210,8 @@ async function fillGVoices(){
     sel.replaceChildren(...opts);
     sel.value=vault.settings["gVoice_th-TH_"+gender]||"";
     const m=list.filter(v=>v.ssmlGender==="MALE").length, f=list.filter(v=>v.ssmlGender==="FEMALE").length;
-    $("gttsStatus").textContent=`เชื่อมแล้ว · เสียงไทย ${f} หญิง / ${m} ชาย · อ่านต่อได้ตอนปิดจอ`;
+    const u=ttsUsage(), fmtN=(n)=>(n/1000).toFixed(0)+"k";
+    $("gttsStatus").textContent=`เชื่อมแล้ว · เสียงไทย ${f} หญิง / ${m} ชาย · อ่านต่อได้ตอนปิดจอ · ใช้เดือนนี้: Chirp ${fmtN(u.chirp)}/950k, Neural2 ${fmtN(u.neural2)}/950k, Standard ${fmtN(u.standard)}/3,900k (หยุดเองก่อนเกินโควตาฟรี)`;
   } catch (e) { $("gttsStatus").textContent="ใช้ key นี้ไม่ได้: "+e.message; }
 }
 $("gttsSave").onclick=async()=>{
