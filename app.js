@@ -141,6 +141,9 @@ function mark(){
   const cur=reader.children[idx];
   if (cur && state==="playing" && view==="read") reader.scrollTo({ top: cur.offsetTop-reader.offsetTop-40, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth" });
   playBtn.innerHTML = state==="playing" ? icon("pause")+"หยุดชั่วคราว" : state==="paused" ? icon("play")+"อ่านต่อ" : icon("play")+"อ่านออกเสียง";
+  const eh=$("engineHint"); if (eh) eh.textContent = (typeof useCloud==="function" && useCloud())
+    ? "ใช้เสียง Google · ปิดจอหรือสลับแอพได้ เสียงอ่านต่อจนจบ หยุด/ข้ามได้จากหน้าล็อก"
+    : "ใช้เสียงในเครื่อง · Android อาจหยุดเสียงเมื่อปิดจอ ใส่ Google API key ในตั้งค่าเพื่ออ่านต่อตอนปิดจอ หรือเปิดสวิตช์ด้านบน";
 }
 function makeUtterance(text){
   const u=new SpeechSynthesisUtterance(text);
@@ -224,7 +227,7 @@ async function gSynth(text){
     const j=await r.json().catch(()=>({}));
     if (!r.ok) throw new Error(j?.error?.message||("HTTP "+r.status));
     addUsage(v.name, text.length);
-    return URL.createObjectURL(new Blob([unb64(j.audioContent)],{ type:"audio/mpeg" }));
+    return new Blob([unb64(j.audioContent)],{ type:"audio/mpeg" });
   })();
   audioCache.set(key, job); job.catch(()=>audioCache.delete(key));
   if (audioCache.size>120) audioCache.delete(audioCache.keys().next().value);
@@ -241,20 +244,37 @@ function groupChunks(list, from){
   return out;
 }
 function primeAudio(){ try { cloudAudio.src="silence.wav"; cloudAudio.play().catch(()=>{}); } catch {} }
+// Synthesize everything first, then play it as ONE continuous MP3 file.
+// No track changes mid-way means Android has no moment to suspend playback when the screen is off.
+let lastAudioUrl=null;
 async function cloudRun(groups, my, hooks){
-  const pre=(i)=>{ const g=groups[i]; if (g && !g.url) g.url=gSynth(g.text); };
-  pre(0); pre(1); pre(2);
-  for (let gi=0; gi<groups.length; gi++) {
+  const BATCH=40;
+  for (let b=0; b<groups.length; b+=BATCH) {
+    const part=groups.slice(b, b+BATCH);
+    hooks.preparing && hooks.preparing(true);
+    let blobs;
+    try {
+      blobs=new Array(part.length); let next=0;
+      const worker=async()=>{ while (next<part.length) { const k=next++; blobs[k]=await gSynth(part[k].text); if (my!==runId) return; } };
+      await Promise.all([worker(),worker(),worker(),worker()]);
+    } catch (e) { hooks.preparing && hooks.preparing(false); if (my===runId) hooks.fail(e, part[0]); return; }
+    hooks.preparing && hooks.preparing(false);
     if (my!==runId) return;
-    const g=groups[gi]; pre(gi+1); pre(gi+2); pre(gi+3);
-    let url; try { url=await g.url; } catch (e) { if (my===runId) hooks.fail(e, g); return; }
-    if (my!==runId) return;
-    hooks.start && hooks.start(g);
-    cloudAudio.src=url;
-    cloudAudio.ontimeupdate = hooks.progress ? ()=>{ if (my===runId && cloudAudio.duration) hooks.progress(g, cloudAudio.currentTime/cloudAudio.duration); } : null;
-    try { await cloudAudio.play(); } catch (e) { if (my===runId) hooks.fail(new Error("เล่นเสียงไม่ได้ แตะปุ่มเล่นอีกครั้ง"), g); return; }
+    const lens=part.flatMap(g=>g.lens), total=lens.reduce((a,c)=>a+c,0)||1, first=part[0].from;
+    if (lastAudioUrl) URL.revokeObjectURL(lastAudioUrl);
+    lastAudioUrl=URL.createObjectURL(new Blob(blobs,{ type:"audio/mpeg" }));
+    cloudAudio.src=lastAudioUrl;
+    hooks.start && hooks.start(part[0]);
+    cloudAudio.ontimeupdate = hooks.progress ? ()=>{
+      if (my!==runId || !cloudAudio.duration) return;
+      const f=cloudAudio.currentTime/cloudAudio.duration; let acc=0, k=0;
+      while (k<lens.length-1 && (acc+lens[k])/total<=f) { acc+=lens[k]; k++; }
+      hooks.progress(first+k);
+    } : null;
+    try { await cloudAudio.play(); } catch (e) { if (my===runId) hooks.fail(new Error("เล่นเสียงไม่ได้ แตะปุ่มเล่นอีกครั้ง"), part[0]); return; }
     await new Promise(res=>{ cloudResolve=res; cloudAudio.onended=()=>res(); cloudAudio.onerror=()=>res(); });
     cloudResolve=null;
+    if (my!==runId) return;
   }
   if (my===runId) hooks.done && hooks.done();
 }
@@ -263,8 +283,9 @@ function cloudReader(i){
   playMode="cloud"; idx=i; state="playing"; mark(); talking(false);
   setMeta(chunks[i]); if (MS) MS.playbackState="playing"; wakeOn();
   cloudRun(groupChunks(chunks, i), my, {
+    preparing:(on)=>{ if (on) playBtn.innerHTML=icon("pause")+"กำลังเตรียมเสียง…"; else mark(); },
     start:(g)=>{ idx=g.from; mark(); setMeta(chunks[g.from]); },
-    progress:(g,f)=>{ const total=g.lens.reduce((a,b)=>a+b,0); let acc=0, k=g.from; for (const L of g.lens) { if ((acc+L)/total>f) break; acc+=L; k++; } k=Math.min(k,g.to); if (k!==idx) { idx=k; mark(); } },
+    progress:(k)=>{ if (k!==idx) { idx=k; mark(); setMeta(chunks[k]); } },
     done:()=>{ state="idle"; idx=0; playMode="browser"; mark(); if (MS) { MS.playbackState="none"; try { MS.metadata=null; } catch {} } wakeOff(); },
     fail:(e,g)=>{ cloudFailUntil=Date.now()+60000; toast("เสียง Google ใช้ไม่ได้ ("+e.message+") ใช้เสียงในเครื่องแทน"); playMode="browser"; speakFrom(g.from); }
   });
@@ -631,6 +652,7 @@ function applySettingsUI(){
   $("gttsKey").value = s.gttsKey ? "••••••••" : "";
   $("gttsOn").checked = s.gttsOn!==false;
   if (!gFilled && s.gttsKey) { gFilled=true; fillGVoices(); }
+  mark();
   $("sheetGroup").hidden=false;
   if (document.activeElement!==$("sheetUrl")) $("sheetUrl").value=s.sheetUrl||"";
   $("sheetKey").value=s.sheetKey?"••••••••":"";
